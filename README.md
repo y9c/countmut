@@ -62,7 +62,8 @@ Filtering (Bisulfite):
   --max-unc INTEGER          Max unconverted (Zf) [default: 3]
   --min-con INTEGER          Min converted (Yf) [default: 1]
   --max-sub INTEGER          Max substitutions (NS) [default: 1]
-  --min-base-qual INTEGER    Min base quality (Phred) [default: 20]
+  --min-baseq INTEGER        Min base quality (Phred) [default: 20]
+  --min-mapq INTEGER         Min mapping quality (MAPQ) [default: 0]
 ```
 
 **Note**: BAM must have NS, Zf, and Yf tags for bisulfite analysis.

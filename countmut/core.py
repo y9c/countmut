@@ -165,7 +165,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             max_unc,
             min_con,
             max_sub,
-            min_base_qual,
+            min_baseq,
+            min_mapq,
             worker_id,
         ) = args
 
@@ -286,6 +287,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 if read.is_unmapped or read.is_duplicate or read.is_secondary:
                     continue
 
+                # Filter by mapping quality (MAPQ)
+                if read.mapping_quality < min_mapq:
+                    continue
+
                 # Get read properties (avoid exceptions on missing tags)
                 if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
                     continue
@@ -329,7 +334,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     base_qual = int(query_qualities[query_pos]) if query_qualities and query_pos < len(query_qualities) else 0
 
                     # Filter by base quality
-                    if base_qual < min_base_qual:
+                    if base_qual < min_baseq:
                         continue
 
                     if actual_strand == "-":
@@ -448,7 +453,8 @@ def count_mutations(
     max_unc: int = 3,
     min_con: int = 1,
     max_sub: int = 1,
-    min_base_qual: int = 20,
+    min_baseq: int = 20,
+    min_mapq: int = 0,
 ) -> bool:
     """
     Count mutations from BAM pileup data with parallel processing.
@@ -621,7 +627,8 @@ def count_mutations(
                     max_unc,
                     min_con,
                     max_sub,
-                    min_base_qual,
+                    min_baseq,
+                    min_mapq,
                     i,
                 )
             )

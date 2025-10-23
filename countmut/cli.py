@@ -205,11 +205,18 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     help="[bold]Max substitutions[/bold] (NS) for high-quality alignment",
 )
 @click.option(
-    "--min-base-qual",
+    "--min-baseq",
     type=int,
     default=20,
     show_default=True,
     help="[bold]Min base quality[/bold] (Phred score) to count bases",
+)
+@click.option(
+    "--min-mapq",
+    type=int,
+    default=0,
+    show_default=True,
+    help="[bold]Min mapping quality[/bold] (MAPQ) to count reads",
 )
 @click.version_option(importlib_metadata.version("countmut"), "--version", "-v", prog_name="countmut", message="%(prog)s %(version)s")
 def main(
@@ -230,7 +237,8 @@ def main(
     max_unc: int,
     min_con: int,
     max_sub: int,
-    min_base_qual: int,
+    min_baseq: int,
+    min_mapq: int,
 ):
     """
     [bold blue]🧬 CountMut - Fast Mutation Counting from BAM Pileup[/bold blue]
@@ -339,7 +347,8 @@ def main(
     info_table.add_row("Max unconverted (Zf):", str(max_unc))
     info_table.add_row("Min converted (Yf):", str(min_con))
     info_table.add_row("Max substitutions (NS):", str(max_sub))
-    info_table.add_row("Min base quality (Q):", str(min_base_qual))
+    info_table.add_row("Min base quality (Q):", str(min_baseq))
+    info_table.add_row("Min mapping quality (MAPQ):", str(min_mapq))
 
     console.print(
         Panel(
@@ -379,7 +388,8 @@ def main(
             max_unc=max_unc,
             min_con=min_con,
             max_sub=max_sub,
-            min_base_qual=min_base_qual,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
         )
 
         if success:
