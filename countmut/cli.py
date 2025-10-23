@@ -40,12 +40,8 @@ click.rich_click.TEXT_EMOJIS = True
 click.rich_click.OPTION_GROUPS = {
     "countmut": [
         {
-            "name": "Required Options",
-            "options": ["--input", "--reference"],
-        },
-        {
-            "name": "Output Options",
-            "options": ["--output", "--save-rest", "--force"],
+            "name": "Input/Output Options",
+            "options": ["--input", "--reference", "--output", "--force"],
         },
         {
             "name": "Mutation Analysis",
@@ -64,8 +60,8 @@ click.rich_click.OPTION_GROUPS = {
             ],
         },
         {
-            "name": "Sequence Context",
-            "options": ["--pad"],
+            "name": "Output Records",
+            "options": ["--pad", "--save-rest"],
         },
         {
             "name": "Help & Version",
