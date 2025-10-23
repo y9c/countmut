@@ -94,9 +94,9 @@ TSV file with the following columns:
 | `o0`, `o1`, `o2` | **Other bases** counts (with `--save-rest`) |
 
 **Count categories** (x0, x1, x2):
-- **x0 (drop)**: Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
-- **x1 (clean)**: High-quality bases passing all filters
-- **x2 (unconverted)**: Bases in unconverted reads (high Zf or low Yf)
+- **x0 (low quality)**: Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
+- **x1 (high conversion)**: Bases from reads with high conversion efficiency (low Zf and high Yf)
+- **x2 (insufficient conversion)**: Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
 
 
 &nbsp;

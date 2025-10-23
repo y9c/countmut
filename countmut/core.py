@@ -255,14 +255,14 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         for pos in target_sites_list:
             position_data[pos] = {
                 "+": {
-                    "clean_count": Counter(),
-                    "unc_count": Counter(),
-                    "drop_count": Counter(),
+                    "high_conversion_count": Counter(),
+                    "insufficient_conversion_count": Counter(),
+                    "low_quality_count": Counter(),
                 },
                 "-": {
-                    "clean_count": Counter(),
-                    "unc_count": Counter(),
-                    "drop_count": Counter(),
+                    "high_conversion_count": Counter(),
+                    "insufficient_conversion_count": Counter(),
+                    "low_quality_count": Counter(),
                 },
             }
 
@@ -386,24 +386,28 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             if ref_pos not in position_data:
                 continue
 
-            # Count in drop_count if ANY quality filter fails
+            # Count in low_quality if ANY quality filter fails
             if not (
                 is_internal
                 and passes_mismatch_filter
                 and passes_mapq_filter
                 and passes_baseq_filter
             ):
-                position_data[ref_pos][strand_symbol]["drop_count"][query_base] += 1
-            # Count in clean_count/unc_count only if ALL quality filters pass
+                position_data[ref_pos][strand_symbol]["low_quality_count"][
+                    query_base
+                ] += 1
+            # Count in high_conversion/insufficient_conversion only if ALL quality filters pass
             else:
                 if passes_conversion_filter:
-                    # Sufficiently converted reads go to clean_count
-                    position_data[ref_pos][strand_symbol]["clean_count"][
+                    # High conversion efficiency (pass quality + conversion filters)
+                    position_data[ref_pos][strand_symbol]["high_conversion_count"][
                         query_base
                     ] += 1
                 else:
-                    # Insufficiently converted reads go to unc_count
-                    position_data[ref_pos][strand_symbol]["unc_count"][query_base] += 1
+                    # Insufficient conversion efficiency (pass quality but fail conversion)
+                    position_data[ref_pos][strand_symbol][
+                        "insufficient_conversion_count"
+                    ][query_base] += 1
 
         # Calculate total skipped
         total_skipped = (
@@ -435,9 +439,15 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 if process_reverse_only and strand_symbol != "-":
                     continue
 
-                clean_count = position_data[pos][strand_symbol]["clean_count"]
-                unc_count = position_data[pos][strand_symbol]["unc_count"]
-                drop_count = position_data[pos][strand_symbol]["drop_count"]
+                high_conversion_count = position_data[pos][strand_symbol][
+                    "high_conversion_count"
+                ]
+                insufficient_conversion_count = position_data[pos][strand_symbol][
+                    "insufficient_conversion_count"
+                ]
+                low_quality_count = position_data[pos][strand_symbol][
+                    "low_quality_count"
+                ]
 
                 # Get motif
                 motif = extended_target_seq[
@@ -450,15 +460,15 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
                 # Calculate counts
                 # u = unconverted (reference base), m = mutation (mutation base only), o = others
-                u0 = drop_count[ref_base]
-                m0 = drop_count[mut_base]
-                o0 = drop_count.total() - u0 - m0
-                u1 = clean_count[ref_base]
-                m1 = clean_count[mut_base]
-                o1 = clean_count.total() - u1 - m1
-                u2 = unc_count[ref_base]
-                m2 = unc_count[mut_base]
-                o2 = unc_count.total() - u2 - m2
+                u0 = low_quality_count[ref_base]
+                m0 = low_quality_count[mut_base]
+                o0 = low_quality_count.total() - u0 - m0
+                u1 = high_conversion_count[ref_base]
+                m1 = high_conversion_count[mut_base]
+                o1 = high_conversion_count.total() - u1 - m1
+                u2 = insufficient_conversion_count[ref_base]
+                m2 = insufficient_conversion_count[mut_base]
+                o2 = insufficient_conversion_count.total() - u2 - m2
 
                 if u1 + m1 + u2 + m2 > 0:
                     site_info = [region_chrom, pos + 1, strand_symbol, motif]
