@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "countmut"
 version = "0.0.1"
-description = "Ultra-fast parallel mutation counter for bisulfite sequencing with optimized file I/O"
+description = "Ultra-fast strand-aware mutation counter"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
