@@ -310,10 +310,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 ns = read.get_tag("NS")
                 passes_mismatch_filter = ns <= max_sub
 
-                # Check conversion status
+                # Check conversion filter (reads passing are sufficiently converted)
                 zf = read.get_tag("Zf")
                 yf = read.get_tag("Yf")
-                is_converted = (zf <= max_unc) and (yf >= min_con)
+                passes_conversion_filter = (zf <= max_unc) and (yf >= min_con)
 
                 # Process each position in the read
                 query_sequence = read.query_sequence
@@ -363,7 +363,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             bool(passes_mismatch_filter),
                             bool(passes_mapq_filter),
                             bool(passes_baseq_filter),
-                            bool(is_converted),
+                            bool(passes_conversion_filter),
                         )
 
             except (KeyError, AttributeError) as e:
@@ -380,7 +380,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             passes_mismatch_filter,
             passes_mapq_filter,
             passes_baseq_filter,
-            is_converted,
+            passes_conversion_filter,
         ) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
@@ -396,11 +396,13 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 position_data[ref_pos][strand_symbol]["drop_count"][query_base] += 1
             # Count in clean_count/unc_count only if ALL quality filters pass
             else:
-                if is_converted:
+                if passes_conversion_filter:
+                    # Sufficiently converted reads go to clean_count
                     position_data[ref_pos][strand_symbol]["clean_count"][
                         query_base
                     ] += 1
                 else:
+                    # Insufficiently converted reads go to unc_count
                     position_data[ref_pos][strand_symbol]["unc_count"][query_base] += 1
 
         # Calculate total skipped
