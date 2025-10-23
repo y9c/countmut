@@ -287,16 +287,18 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 if read.is_unmapped or read.is_duplicate or read.is_secondary:
                     continue
 
-                # Filter by mapping quality (MAPQ)
-                if read.mapping_quality < min_mapq:
-                    continue
-
                 # Get read properties (avoid exceptions on missing tags)
                 if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
                     continue
+
+                # Check mapping quality
+                passes_mapq_filter = read.mapping_quality >= min_mapq
+
+                # Check mismatch filter
                 ns = read.get_tag("NS")
                 passes_mismatch_filter = ns <= max_sub
 
+                # Check conversion status
                 zf = read.get_tag("Zf")
                 yf = read.get_tag("Yf")
                 is_converted = (zf <= max_unc) and (yf >= min_con)
@@ -333,16 +335,15 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         query_base = base_char.upper()
                     base_qual = int(query_qualities[query_pos]) if query_qualities and query_pos < len(query_qualities) else 0
 
-                    # Filter by base quality
-                    if base_qual < min_baseq:
-                        continue
+                    # Check base quality
+                    passes_baseq_filter = base_qual >= min_baseq
 
                     if actual_strand == "-":
                         query_base = query_base.translate(DNA_COMPLEMENT)
                     key = (ref_pos, read.query_name)
                     prev = best_obs.get(key)
                     if (prev is None) or (base_qual > prev[2]):
-                        best_obs[key] = (actual_strand, query_base, base_qual, bool(is_internal), bool(passes_mismatch_filter), bool(is_converted))
+                        best_obs[key] = (actual_strand, query_base, base_qual, bool(is_internal), bool(passes_mismatch_filter), bool(passes_mapq_filter), bool(passes_baseq_filter), bool(is_converted))
 
             except (KeyError, AttributeError) as e:
                 # Skip reads with missing tags or invalid data
@@ -350,17 +351,20 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 continue
 
         # Apply best observations to position counts (deduplicated across overlapping mates)
-        for (ref_pos, _qname), (strand_symbol, query_base, _q, is_internal, passes_mismatch_filter, is_converted) in best_obs.items():
+        for (ref_pos, _qname), (strand_symbol, query_base, _q, is_internal, passes_mismatch_filter, passes_mapq_filter, passes_baseq_filter, is_converted) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
                 continue
-            if is_internal and passes_mismatch_filter:
+
+            # Count in drop_count if ANY quality filter fails
+            if not (is_internal and passes_mismatch_filter and passes_mapq_filter and passes_baseq_filter):
+                position_data[ref_pos][strand_symbol]['drop_count'][query_base] += 1
+            # Count in clean_count/unc_count only if ALL quality filters pass
+            else:
                 if is_converted:
                     position_data[ref_pos][strand_symbol]['clean_count'][query_base] += 1
                 else:
                     position_data[ref_pos][strand_symbol]['unc_count'][query_base] += 1
-            else:
-                position_data[ref_pos][strand_symbol]['drop_count'][query_base] += 1
 
         # Debug: Log read processing info
         logger.debug(f"Processed {read_count} reads for region {region_chrom}:{region_start}-{region_end}:{strand_option}")
