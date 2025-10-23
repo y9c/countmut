@@ -325,12 +325,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
                 # Iterate via reference positions (fast path) and filter
                 for tup in read.get_aligned_pairs(matches_only=True, with_seq=True):
-                    # tup can be (qpos, rpos) or (qpos, rpos, ref_base) depending on pysam version
-                    # Note: third element is reference base (lowercase for substitutions), not used
-                    if len(tup) >= 2:
-                        query_pos, ref_pos = tup[0], tup[1]
-                    else:
-                        continue
+                    # tup is (qpos, rpos, ref_base) - third element is reference base (lowercase for substitutions)
+                    # We only need query_pos and ref_pos; ref_base is not used
+                    query_pos, ref_pos, _ = tup
                     if query_pos is None or ref_pos is None:
                         continue
                     if ref_pos not in target_sites_set:
