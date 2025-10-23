@@ -89,25 +89,29 @@ Real-world test (3 rRNA genes, 17k reads):
 - BAM files: coordinate-sorted with `.bai` index (auto-created if missing)
 - FASTA files: with `.fai` index (auto-created if missing)
 
-## License
-
-MIT License - see [LICENSE](LICENSE) file.
-
-## Citation
-
-If you use CountMut in your research, please cite:
-
-```
-Ye Chang. (2025). CountMut: Ultra-fast parallel mutation counter for bisulfite sequencing.
-GitHub: https://github.com/y9c/countmut
-```
-
 ## Contact
 
 - **Author**: Ye Chang
 - **Email**: yech1990@gmail.com
 - **Issues**: https://github.com/y9c/countmut/issues
 
----
+## License
 
-**Version 0.0.1** | **MIT License**
+MIT License - see [LICENSE](LICENSE) for details.
+
+&nbsp;
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/y9c/y9c/master/resource/footer_line.svg?sanitize=true"
+  />
+</p>
+<p align="center">
+  Copyright &copy; 2025-present
+  <a href="https://github.com/y9c" target="_blank">Chang Y</a>
+</p>
+<p align="center">
+  <a href="https://github.com/y9c/countmut/blob/main/LICENSE">
+    <img src="https://img.shields.io/static/v1.svg?style=for-the-badge&label=License&message=MIT&logoColor=d9e0ee&colorA=282a36&colorB=c678dd" />
+  </a>
+</p>
