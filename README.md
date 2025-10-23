@@ -7,7 +7,7 @@
 
 **Ultra-fast strand-aware mutation counter**
 
-CountMut counts mutations from bisulfite sequencing /  BAM files with parallel processing, quality-based mate overlap deduplication, and optimized file I/O.
+CountMut counts mutations from bisulfite sequencing / CAM-seq / GLORI-seq / eTAM-seq BAM files with parallel processing, quality-based mate overlap deduplication, and optimized file I/O.
 
 ## Features
 
@@ -81,24 +81,6 @@ Real-world test (3 rRNA genes, 17k reads):
 - **Before optimization**: 16.7s
 - **After optimization**: 4.5s (3.7x faster)
 - **Startup**: 0.2s vs 3.2s (16x faster FASTA index loading)
-
-## Python API
-
-```python
-from countmut import count_mutations
-
-success = count_mutations(
-    samfile="input.bam",
-    reffile="reference.fa",
-    output_file="mutations.tsv",
-    ref_base="T",
-    mut_base="C",
-    threads=8,
-    max_unc=3,
-    min_con=1,
-    max_sub=1
-)
-```
 
 ## Requirements
 
