@@ -273,7 +273,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
-        
+
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
         # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
         best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
@@ -319,18 +319,18 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     skipped_no_sequence += 1
                     continue
                 query_qualities = read.query_qualities or []
-                
+
                 # Mark this read as successfully processed
                 processed_reads += 1
 
                 # Iterate via reference positions (fast path) and filter
                 for tup in read.get_aligned_pairs(matches_only=True, with_seq=True):
-                    # tup can be (qpos, rpos) or (qpos, rpos, base) depending on pysam version
-                    if len(tup) == 3:
-                        query_pos, ref_pos, base_char = tup
+                    # tup can be (qpos, rpos) or (qpos, rpos, ref_base) depending on pysam version
+                    # Note: third element is reference base (lowercase for substitutions), not used
+                    if len(tup) >= 2:
+                        query_pos, ref_pos = tup[0], tup[1]
                     else:
-                        query_pos, ref_pos = tup
-                        base_char = None
+                        continue
                     if query_pos is None or ref_pos is None:
                         continue
                     if ref_pos not in target_sites_set:
@@ -379,7 +379,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
         # Calculate total skipped
         total_skipped = skipped_wrong_strand + skipped_unmapped_dup_secondary + skipped_missing_tags + skipped_no_sequence
-        
+
         # Log read processing statistics
         if total_reads > 0:
             logger.info(
