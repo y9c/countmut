@@ -70,9 +70,9 @@ Filtering (Bisulfite):
 
 TSV file with columns:
 - `chrom`, `pos`, `strand`, `motif` - Position and context
-- `u0`, `d0` - Drop counts (trimmed/unmapped bases)
-- `u1`, `d1` - Clean counts (converted reads)
-- `u2`, `d2` - Unconverted counts
+- `u0`, `u1`, `u2` - Unconverted (reference base) counts [drop, clean, unconverted]
+- `m0`, `m1`, `m2` - Mutation (mutation base only) counts [drop, clean, unconverted]
+- `o0`, `o1`, `o2` - Other bases counts (only with `--save-rest`)
 
 
 &nbsp;

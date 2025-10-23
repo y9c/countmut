@@ -381,22 +381,23 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     motif = reverse_complement(motif)
 
                 # Calculate counts
+                # u = unconverted (reference base), m = mutation (mutation base only), o = others
                 u0 = drop_count[ref_base]
-                d0 = drop_count[mut_base] + drop_count[ref_base]
-                y0 = drop_count.total() - d0
+                m0 = drop_count[mut_base]
+                o0 = drop_count.total() - u0 - m0
                 u1 = clean_count[ref_base]
-                d1 = clean_count[mut_base] + clean_count[ref_base]
-                y1 = clean_count.total() - d1
+                m1 = clean_count[mut_base]
+                o1 = clean_count.total() - u1 - m1
                 u2 = unc_count[ref_base]
-                d2 = unc_count[mut_base] + unc_count[ref_base]
-                y2 = unc_count.total() - d2
+                m2 = unc_count[mut_base]
+                o2 = unc_count.total() - u2 - m2
 
-                if d1 + d2 > 0:
+                if u1 + m1 + u2 + m2 > 0:
                     site_info = [region_chrom, pos + 1, strand_symbol, motif]
                     if save_rest:
-                        counts.append(site_info + [u0, d0, y0, u1, d1, y1, u2, d2, y2])
+                        counts.append(site_info + [u0, u1, u2, m0, m1, m2, o0, o1, o2])
                     else:
-                        counts.append(site_info + [u0, d0, u1, d1, u2, d2])
+                        counts.append(site_info + [u0, u1, u2, m0, m1, m2])
 
         return {
             "worker_id": worker_id,

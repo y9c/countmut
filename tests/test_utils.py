@@ -47,9 +47,9 @@ class TestGetOutputHeaders:
         assert headers[1] == "pos"
         assert headers[2] == "strand"
         assert headers[3] == "motif"
-        assert "y0" not in headers
-        assert "y1" not in headers
-        assert "y2" not in headers
+        assert "o0" not in headers
+        assert "o1" not in headers
+        assert "o2" not in headers
 
     def test_get_output_headers_with_rest(self):
         """Test headers with additional statistics."""
@@ -57,9 +57,9 @@ class TestGetOutputHeaders:
 
         assert len(headers) == 13
         assert headers[0] == "chrom"
-        assert "y0" in headers
-        assert "y1" in headers
-        assert "y2" in headers
+        assert "o0" in headers
+        assert "o1" in headers
+        assert "o2" in headers
 
 
 class TestWriteOutput:
@@ -101,10 +101,10 @@ class TestWriteOutput:
         content = output_file.read_text()
         lines = content.strip().split("\n")
 
-        # Check that y columns are in header
-        assert "y0" in lines[0]
-        assert "y1" in lines[0]
-        assert "y2" in lines[0]
+        # Check that o columns are in header
+        assert "o0" in lines[0]
+        assert "o1" in lines[0]
+        assert "o2" in lines[0]
 
     def test_write_output_creates_directory(self, tmp_path):
         """Test that output creates parent directories."""

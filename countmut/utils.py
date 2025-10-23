@@ -43,6 +43,9 @@ def get_output_headers(save_rest: bool = False) -> list[str]:
 
     Returns:
         List of column headers
+        - u0, u1, u2: unconverted (reference base) counts
+        - m0, m1, m2: mutation (mutation base only) counts  
+        - o0, o1, o2: other bases counts (only with save_rest)
     """
     if save_rest:
         return [
@@ -51,14 +54,14 @@ def get_output_headers(save_rest: bool = False) -> list[str]:
             "strand",
             "motif",
             "u0",
-            "d0",
-            "y0",
             "u1",
-            "d1",
-            "y1",
             "u2",
-            "d2",
-            "y2",
+            "m0",
+            "m1",
+            "m2",
+            "o0",
+            "o1",
+            "o2",
         ]
     return [
         "chrom",
@@ -66,11 +69,11 @@ def get_output_headers(save_rest: bool = False) -> list[str]:
         "strand",
         "motif",
         "u0",
-        "d0",
         "u1",
-        "d1",
         "u2",
-        "d2",
+        "m0",
+        "m1",
+        "m2",
     ]
 
 
