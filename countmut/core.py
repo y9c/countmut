@@ -324,10 +324,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 processed_reads += 1
 
                 # Iterate via reference positions (fast path) and filter
-                for tup in read.get_aligned_pairs(matches_only=True, with_seq=True):
-                    # tup is (qpos, rpos, ref_base) - third element is reference base (lowercase for substitutions)
-                    # We only need query_pos and ref_pos; ref_base is not used
-                    query_pos, ref_pos, _ = tup
+                for query_pos, ref_pos in read.get_aligned_pairs(matches_only=True):
+                    # matches_only=True: only aligned positions (no insertions/deletions with None)
                     if query_pos is None or ref_pos is None:
                         continue
                     if ref_pos not in target_sites_set:
