@@ -3,10 +3,12 @@
 CountMut CLI - Beautiful command-line interface for mutation counting
 
 This module provides a modern CLI interface for CountMut with rich output,
-progress tracking, and comprehensive help.
+progress tracking, and comprehensive help. Options are organized into logical
+groups for better readability and user experience.
 
 Author: Ye Chang
 Date: 2025-10-23
+Version: 0.0.2
 """
 
 import os
@@ -33,6 +35,44 @@ click.rich_click.ERRORS_SUGGESTION = (
 )
 click.rich_click.ERRORS_EPILOGUE = "To find out more, visit [link=https://github.com/y9c/countmut]https://github.com/y9c/countmut[/link]"
 click.rich_click.TEXT_EMOJIS = True
+
+# Configure option groups for better organization
+click.rich_click.OPTION_GROUPS = {
+    "countmut": [
+        {
+            "name": "Required Options",
+            "options": ["--input", "--reference"],
+        },
+        {
+            "name": "Output Options",
+            "options": ["--output", "--save-rest", "--force"],
+        },
+        {
+            "name": "Mutation Analysis",
+            "options": ["--ref-base", "--mut-base", "--strand", "--region"],
+        },
+        {
+            "name": "Quality Filters",
+            "options": [
+                "--min-baseq",
+                "--min-mapq",
+                "--max-sub",
+                "--trim-start",
+                "--trim-end",
+                "--max-unc",
+                "--min-con",
+            ],
+        },
+        {
+            "name": "Sequence Context",
+            "options": ["--pad"],
+        },
+        {
+            "name": "Help & Version",
+            "options": ["--help", "--version"],
+        },
+    ],
+}
 
 console = Console()
 
@@ -246,36 +286,32 @@ def main(
     min_mapq: int,
 ):
     """
-    [bold blue]🧬 CountMut - Fast Mutation Counting from BAM Pileup[/bold blue]
+    [bold blue]🧬 CountMut - Ultra-fast Strand-aware Mutation Counter[/bold blue]
 
-    A fast, parallel tool for counting mutations from BAM pileup data with
-    bisulfite conversion analysis and genomic window processing.
+    Fast, parallel mutation counting from bisulfite sequencing (BS-seq, CAM-seq,
+    GLORI-seq, eTAM-seq) BAM files with quality-based overlap deduplication.
 
     [bold]Key Features:[/bold]
 
-     • [bold green]Parallel processing[/bold green]: Multi-threaded genomic window processing\n
-     • [bold green]Bisulfite analysis[/bold green]: Built-in conversion detection\n
-     • [bold green]Flexible output[/bold green]: TSV format with optional statistics\n
-     • [bold green]Memory efficient[/bold green]: Streaming processing for large files\n
-     • [bold green]Rich output[/bold green]: Progress bars and detailed statistics\n
-     • [bold green]Region support[/bold green]: Process specific genomic regions
+     • [bold green]Ultra-fast[/bold green]: Direct FASTA index reading, shared file handles, BGZF multi-threading\n
+     • [bold green]Bisulfite support[/bold green]: NS, Zf, Yf tag filtering for conversion analysis\n
+     • [bold green]Accurate[/bold green]: Quality-based mate overlap deduplication prevents double-counting\n
+     • [bold green]Parallel[/bold green]: Multi-threaded genomic window processing\n
+     • [bold green]Flexible[/bold green]: Configurable filtering, strand-specific processing, auto-indexing
 
     [bold]Input Requirements:[/bold]
 
-     • Input BAM file, coordinate-sorted (required), indexed with .bai file (created automatically if missing)\n
-     • Reference FASTA file (required)
+     • BAM file (coordinate-sorted, auto-creates .bai index if missing)\n
+     • Reference FASTA file (auto-creates .fai index if missing)\n
+     • [yellow]Required tags[/yellow]: NS, Zf, Yf (essential for bisulfite analysis)
 
     [bold]Output Format:[/bold]
 
-     The output TSV file contains the following columns:
-     • chrom: Chromosome name
-     • pos: Position (1-based)
-     • strand: Strand (+ or -)
-     • motif: Sequence motif around the position
-     • u0, d0: Drop counts (unconverted, total)
-     • u1, d1: Clean counts (unconverted, total)
-     • u2, d2: Unconverted counts (unconverted, total)
-     • y0, y1, y2: Additional counts (if --save-rest is used)
+     TSV file with columns:
+     • chrom, pos, strand, motif: Position and sequence context
+     • u0, u1, u2: Unconverted (reference base) counts [drop, clean, unconverted]
+     • m0, m1, m2: Mutation (mutation base only) counts [drop, clean, unconverted]
+     • o0, o1, o2: Other bases counts [drop, clean, unconverted] (with --save-rest)
 
     """
 

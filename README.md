@@ -71,10 +71,15 @@ Filtering (Bisulfite):
 ## Output Format
 
 TSV file with columns:
-- `chrom`, `pos`, `strand`, `motif` - Position and context
+- `chrom`, `pos`, `strand`, `motif` - Position and sequence context
 - `u0`, `u1`, `u2` - Unconverted (reference base) counts [drop, clean, unconverted]
 - `m0`, `m1`, `m2` - Mutation (mutation base only) counts [drop, clean, unconverted]
-- `o0`, `o1`, `o2` - Other bases counts (only with `--save-rest`)
+- `o0`, `o1`, `o2` - Other bases counts [drop, clean, unconverted] (only with `--save-rest`)
+
+Where:
+- **drop** (x0): Bases failing quality filters (internal position, mismatch, mapq, baseq)
+- **clean** (x1): High-quality bases passing all filters
+- **unconverted** (x2): Bases in unconverted reads (high Zf or low Yf)
 
 
 &nbsp;

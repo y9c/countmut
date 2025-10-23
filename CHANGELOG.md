@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.2] - 2025-10-24
+
+### Added
+- **Organized CLI option groups** for better readability and user experience
+  - Required Options (input, reference)
+  - Output Options (output, save-rest, force)
+  - Mutation Analysis (ref-base, mut-base, strand, region)
+  - Performance Options (threads, bin-size)
+  - Quality Filters (min-baseq, min-mapq, max-sub, trim-start, trim-end)
+  - Bisulfite Filters (max-unc, min-con)
+  - Sequence Context (pad)
+  - Help & Version
+- Enhanced CLI help text with clearer descriptions
+- Improved output format documentation in README
+
+### Changed
+- Renamed `--min-base-qual` to `--min-baseq` for consistency
+- Added `--min-mapq` option for filtering by mapping quality (default: 0)
+- Reorganized filtering parameters into logical groups
+- Updated CLI docstring to reflect latest features and output format
+- Enhanced README with detailed explanation of output columns (drop/clean/unconverted)
+
+### Fixed
+- Query base extraction now correctly uses `read.query_sequence[query_pos]` instead of reference base
+- Simplified `get_aligned_pairs` to use `with_seq=False` for better performance
+- Fixed tuple unpacking for modern pysam (always 2 elements when `with_seq=False`)
+
+### Performance
+- Using `get_aligned_pairs(matches_only=True, with_seq=False)` for optimal performance
+- No reference sequence construction overhead
+- Direct query position to base mapping
+
 ## [0.0.1] - 2025-10-23
 
 ### Added
