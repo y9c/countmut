@@ -334,13 +334,23 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         continue
                     if query_pos >= len(query_sequence):
                         continue
+
                     # Check if position is internal (not in trimmed regions)
-                    # Note: query_pos is relative to read sequence (5' to 3' of fragment),
-                    # not genomic position, so trim_start/end are based on fragment orientation
-                    is_internal = (
-                        query_pos >= trim_start
-                        and len(query_sequence) - query_pos > trim_end
-                    )
+                    # Trim based on actual strand orientation (fragment 5' to 3')
+                    # For forward strand (+): 5' is at start (low query_pos), 3' is at end (high query_pos)
+                    # For reverse strand (-): 5' is at end (high query_pos), 3' is at start (low query_pos)
+                    if actual_strand == "+":
+                        # Forward: trim_start from 5' (beginning), trim_end from 3' (end)
+                        is_internal = (
+                            query_pos >= trim_start
+                            and len(query_sequence) - query_pos > trim_end
+                        )
+                    else:
+                        # Reverse: trim_start from 5' (end), trim_end from 3' (beginning)
+                        is_internal = (
+                            query_pos >= trim_end
+                            and len(query_sequence) - query_pos > trim_start
+                        )
                     # Get query base from read sequence (base_char is reference base, not query)
                     query_base = query_sequence[query_pos].upper()
                     base_qual = (
