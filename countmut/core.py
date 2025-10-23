@@ -165,6 +165,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             max_unc,
             min_con,
             max_sub,
+            min_base_qual,
             worker_id,
         ) = args
 
@@ -289,7 +290,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
                     continue
                 ns = read.get_tag("NS")
-                is_mapped = ns <= max_sub
+                passes_mismatch_filter = ns <= max_sub
 
                 zf = read.get_tag("Zf")
                 yf = read.get_tag("Yf")
@@ -326,12 +327,17 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     else:
                         query_base = base_char.upper()
                     base_qual = int(query_qualities[query_pos]) if query_qualities and query_pos < len(query_qualities) else 0
+
+                    # Filter by base quality
+                    if base_qual < min_base_qual:
+                        continue
+
                     if actual_strand == "-":
                         query_base = query_base.translate(DNA_COMPLEMENT)
                     key = (ref_pos, read.query_name)
                     prev = best_obs.get(key)
                     if (prev is None) or (base_qual > prev[2]):
-                        best_obs[key] = (actual_strand, query_base, base_qual, bool(is_internal), bool(is_mapped), bool(is_converted))
+                        best_obs[key] = (actual_strand, query_base, base_qual, bool(is_internal), bool(passes_mismatch_filter), bool(is_converted))
 
             except (KeyError, AttributeError) as e:
                 # Skip reads with missing tags or invalid data
@@ -339,11 +345,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 continue
 
         # Apply best observations to position counts (deduplicated across overlapping mates)
-        for (ref_pos, _qname), (strand_symbol, query_base, _q, is_internal, is_mapped, is_converted) in best_obs.items():
+        for (ref_pos, _qname), (strand_symbol, query_base, _q, is_internal, passes_mismatch_filter, is_converted) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
                 continue
-            if is_internal and is_mapped:
+            if is_internal and passes_mismatch_filter:
                 if is_converted:
                     position_data[ref_pos][strand_symbol]['clean_count'][query_base] += 1
                 else:
@@ -442,6 +448,7 @@ def count_mutations(
     max_unc: int = 3,
     min_con: int = 1,
     max_sub: int = 1,
+    min_base_qual: int = 20,
 ) -> bool:
     """
     Count mutations from BAM pileup data with parallel processing.
@@ -614,6 +621,7 @@ def count_mutations(
                     max_unc,
                     min_con,
                     max_sub,
+                    min_base_qual,
                     i,
                 )
             )
