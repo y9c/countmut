@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2025-10-24
+
+### Changed
+- **Major internal refactoring for clarity**: Renamed internal variables for better code readability
+  - `is_converted` → `passes_conversion_filter` (clearer boolean logic)
+  - `drop_count` → `low_quality_count` (failing quality filters)
+  - `clean_count` → `high_conversion_count` (high conversion efficiency)
+  - `unc_count` → `insufficient_conversion_count` (poor conversion efficiency)
+- **Reorganized CLI option groups** for better UX:
+  - Combined Required/Output into "Input/Output Options"
+  - Merged Quality and Bisulfite filters into single "Quality Filters" group
+  - Added "Output Records" group for pad and save-rest
+- **Enhanced documentation**:
+  - Updated README feature description: "Call mutation without pileup reads"
+  - Improved count category descriptions with accurate terminology
+  - Added `-p` short flag for `--pad` option
+  - Fixed `--save-rest` description to show correct column names (o0,o1,o2)
+  - Added markdown table for output format
+  - Better blockquote styling for header
+
+### Fixed
+- Corrected misleading variable names that confused conversion status
+- Updated all documentation to reflect accurate filtering logic
+
+### Documentation
+- x0 (low quality): Bases failing quality filters
+- x1 (high conversion): Reads with high conversion efficiency (low Zf and high Yf)
+- x2 (insufficient conversion): Reads with poor conversion efficiency (high Zf or low Yf)
+
 ## [0.0.2] - 2025-10-24
 
 ### Added

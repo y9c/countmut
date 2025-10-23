@@ -10,7 +10,7 @@ CountMut is a high-performance tool for counting mutations from bisulfite sequen
 
 ## Features
 
-- 🚀 **Ultra-Fast**: Direct FASTA index reading, shared file handles, BGZF multi-threading
+- 🚀 **Ultra-Fast**: Call mutation without pileup reads
 - 🧬 **Bisulfite Support**: NS, Zf, Yf tag filtering for conversion analysis
 - 🎯 **Accurate**: Quality-based mate overlap deduplication prevents double-counting
 - ⚡ **Parallel**: Multi-threaded genomic window processing
