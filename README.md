@@ -75,29 +75,6 @@ TSV file with columns:
 - `u1`, `d1` - Clean counts (converted reads)
 - `u2`, `d2` - Unconverted counts
 
-## Performance
-
-Real-world test (3 rRNA genes, 17k reads):
-- **Before optimization**: 16.7s
-- **After optimization**: 4.5s (3.7x faster)
-- **Startup**: 0.2s vs 3.2s (16x faster FASTA index loading)
-
-## Requirements
-
-- Python 3.10+
-- pysam, rich, click, rich-click, numpy
-- BAM files: coordinate-sorted with `.bai` index (auto-created if missing)
-- FASTA files: with `.fai` index (auto-created if missing)
-
-## Contact
-
-- **Author**: Ye Chang
-- **Email**: yech1990@gmail.com
-- **Issues**: https://github.com/y9c/countmut/issues
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
 
 &nbsp;
 
