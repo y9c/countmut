@@ -89,21 +89,6 @@ Real-world test (3 rRNA genes, 17k reads):
 - BAM files: coordinate-sorted with `.bai` index (auto-created if missing)
 - FASTA files: with `.fai` index (auto-created if missing)
 
-## Development
-
-```bash
-# Clone and install
-git clone https://github.com/y9c/countmut.git
-cd countmut
-uv sync --dev
-
-# Run tests
-uv run pytest tests/ -v
-
-# Lint
-uv run ruff check .
-```
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
