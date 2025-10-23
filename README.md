@@ -35,38 +35,49 @@ countmut -i input.bam -r reference.fa -o mutations.tsv --ref-base T --mut-base C
 countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-con 2
 ```
 
-## Key Options
+## Options
 
+**Input/Output**
 ```bash
-Required:
-  -i, --input PATH           Input BAM file
-  -r, --reference PATH       Reference FASTA file
-
-Output:
-  -o, --output PATH          Output TSV file (default: stdout)
-
-Mutation:
-  --ref-base TEXT            Reference base [default: A]
-  --mut-base TEXT            Mutation base [default: G]
-  --strand [both|forward|reverse]  Strand processing [default: both]
-  --region TEXT              Specific region (e.g., 'chr1:1000000-2000000')
-
-Performance:
-  -t, --threads INTEGER      Number of threads [default: auto]
-  -b, --bin-size INTEGER     Genomic bin size [default: 10000]
-
-Filtering (Bisulfite):
-  --pad INTEGER              Motif window padding [default: 15]
-  --trim-start INTEGER       Trim 5' bases [default: 2]
-  --trim-end INTEGER         Trim 3' bases [default: 2]
-  --max-unc INTEGER          Max unconverted (Zf) [default: 3]
-  --min-con INTEGER          Min converted (Yf) [default: 1]
-  --max-sub INTEGER          Max substitutions (NS) [default: 1]
-  --min-baseq INTEGER        Min base quality (Phred) [default: 20]
-  --min-mapq INTEGER         Min mapping quality (MAPQ) [default: 0]
+-i, --input PATH       Input BAM file (coordinate-sorted) [required]
+-r, --reference PATH   Reference FASTA file [required]
+-o, --output PATH      Output TSV file (default: stdout)
+-f, --force            Overwrite output without prompting
 ```
 
-**Note**: BAM must have NS, Zf, and Yf tags for bisulfite analysis.
+**Mutation Analysis**
+```bash
+--ref-base TEXT        Reference base to count from [default: A]
+--mut-base TEXT        Mutation base to count [default: G]
+--strand TEXT          Strand: both/forward/reverse [default: both]
+--region TEXT          Genomic region (e.g., 'chr1:1000000-2000000')
+```
+
+**Performance**
+```bash
+-t, --threads INTEGER  Number of parallel threads [default: auto]
+-b, --bin-size INTEGER Genomic bin size in bp [default: 10000]
+```
+
+**Quality Filters**
+```bash
+--min-baseq INTEGER    Min base quality (Phred score) [default: 20]
+--min-mapq INTEGER     Min mapping quality (MAPQ) [default: 0]
+--max-sub INTEGER      Max substitutions (NS tag) [default: 1]
+--trim-start INTEGER   Trim 5' bases from reads [default: 2]
+--trim-end INTEGER     Trim 3' bases from reads [default: 2]
+--max-unc INTEGER      Max unconverted (Zf tag) [default: 3]
+--min-con INTEGER      Min converted (Yf tag) [default: 1]
+```
+
+**Output Records**
+```bash
+--pad INTEGER          Motif window half-size [default: 15]
+-s, --save-rest        Include other bases (o0, o1, o2 columns)
+```
+
+> **Note**: BAM files must have **NS**, **Zf**, and **Yf** tags (essential for bisulfite analysis).
+> Indices (.bai, .fai) are created automatically if missing.
 
 ## Output Format
 
