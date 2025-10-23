@@ -1,9 +1,8 @@
-# CountMut 🧬
+# CountMut
 
-[![CI](https://github.com/y9c/countmut/actions/workflows/ci.yml/badge.svg)](https://github.com/y9c/countmut/actions/workflows/ci.yml)
-[![PyPI version](https://badge.fury.io/py/countmut.svg)](https://badge.fury.io/py/countmut)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Pypi Releases](https://img.shields.io/pypi/v/countmut.svg)](https://pypi.python.org/pypi/countmut)
+[![Downloads](https://img.shields.io/pepy/dt/countmut)](https://pepy.tech/project/countmut)
+[![Development Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/y9c/countmut)
 
 **Ultra-fast strand-aware mutation counter**
 
