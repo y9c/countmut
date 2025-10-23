@@ -64,8 +64,8 @@ countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-co
 --min-baseq INTEGER    Min base quality (Phred score) [default: 20]
 --min-mapq INTEGER     Min mapping quality (MAPQ) [default: 0]
 --max-sub INTEGER      Max substitutions (NS tag) [default: 1]
---trim-start INTEGER   Trim 5' bases from reads [default: 2]
---trim-end INTEGER     Trim 3' bases from reads [default: 2]
+--trim-start INTEGER   Trim N bases from read 5' end (fragment orientation) [default: 2]
+--trim-end INTEGER     Trim N bases from read 3' end (fragment orientation) [default: 2]
 --max-unc INTEGER      Max unconverted (Zf tag) [default: 3]
 --min-con INTEGER      Min converted (Yf tag) [default: 1]
 ```

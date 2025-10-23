@@ -334,9 +334,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         continue
                     if query_pos >= len(query_sequence):
                         continue
-                    # Check if is terminal
+                    # Check if position is internal (not in trimmed regions)
+                    # Note: query_pos is relative to read sequence (5' to 3' of fragment),
+                    # not genomic position, so trim_start/end are based on fragment orientation
                     is_internal = (
-                        query_pos > trim_start
+                        query_pos >= trim_start
                         and len(query_sequence) - query_pos > trim_end
                     )
                     # Get query base from read sequence (base_char is reference base, not query)
@@ -546,8 +548,8 @@ def count_mutations(
         save_rest: Whether to save additional statistics (default: False)
         region: Genomic region to process (e.g., 'chr1:1000000-2000000')
         pad: Motif half-window padding around site (default: 15)
-        trim_start: Trim bases at read 5' end when counting (default: 2)
-        trim_end: Trim bases at read 3' end when counting (default: 2)
+        trim_start: Number of bases to trim from read 5' end (fragment orientation) (default: 2)
+        trim_end: Number of bases to trim from read 3' end (fragment orientation) (default: 2)
         max_unc: Max unconverted threshold (Zf) to consider converted (default: 3)
         min_con: Min converted threshold (Yf) to consider converted (default: 1)
         max_sub: Max substitutions (NS) to consider mapped (default: 1)

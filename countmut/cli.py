@@ -214,14 +214,14 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     type=int,
     default=2,
     show_default=True,
-    help="[bold]Trim bases[/bold] at read 5' end when counting",
+    help="[bold]Trim N bases[/bold] from read 5' end (fragment orientation)",
 )
 @click.option(
     "--trim-end",
     type=int,
     default=2,
     show_default=True,
-    help="[bold]Trim bases[/bold] at read 3' end when counting",
+    help="[bold]Trim N bases[/bold] from read 3' end (fragment orientation)",
 )
 @click.option(
     "--max-unc",
