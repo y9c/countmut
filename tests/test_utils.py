@@ -1,9 +1,6 @@
 """Tests for utility functions."""
 
-import tempfile
-from pathlib import Path
 
-import pytest
 
 from countmut.utils import format_duration, get_output_headers, write_output
 

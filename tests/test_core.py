@@ -3,8 +3,8 @@
 import tempfile
 from pathlib import Path
 
-import pytest
 import pysam
+import pytest
 
 from countmut.core import (
     determine_actual_strand,

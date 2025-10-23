@@ -488,7 +488,7 @@ def count_mutations(
         print(f"📇 BAM index not found. Creating index: {bam_index}")
         try:
             pysam.index(samfile)
-            print(f"✅ BAM index created successfully")
+            print("✅ BAM index created successfully")
         except Exception as e:
             print(f"❌ Failed to create BAM index: {e}")
             return False
@@ -499,7 +499,7 @@ def count_mutations(
         print(f"📇 FASTA index not found. Creating index: {fasta_index}")
         try:
             pysam.faidx(reffile)
-            print(f"✅ FASTA index created successfully")
+            print("✅ FASTA index created successfully")
         except Exception as e:
             print(f"❌ Failed to create FASTA index: {e}")
             return False
