@@ -273,7 +273,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
-
+        
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
         # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
         best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
@@ -296,12 +296,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     skipped_unmapped_dup_secondary += 1
                     continue
 
-                # Skip reads without sequence
-                query_sequence = read.query_sequence
-                if not query_sequence:
-                    skipped_no_sequence += 1
-                    continue
-
                 # Get read properties (avoid exceptions on missing tags)
                 if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
                     skipped_missing_tags += 1
@@ -319,9 +313,13 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 yf = read.get_tag("Yf")
                 is_converted = (zf <= max_unc) and (yf >= min_con)
 
-                # Get base qualities
+                # Process each position in the read
+                query_sequence = read.query_sequence
+                if not query_sequence:
+                    skipped_no_sequence += 1
+                    continue
                 query_qualities = read.query_qualities or []
-
+                
                 # Mark this read as successfully processed
                 processed_reads += 1
 
@@ -344,11 +342,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         query_pos > trim_start
                         and len(query_sequence) - query_pos > trim_end
                     )
-                    # Prefer base from aligned_pairs (when available)
-                    if base_char is None:
-                        query_base = query_sequence[query_pos].upper()
-                    else:
-                        query_base = base_char.upper()
+                    # Get query base from read sequence (base_char is reference base, not query)
+                    query_base = query_sequence[query_pos].upper()
                     base_qual = int(query_qualities[query_pos]) if query_qualities and query_pos < len(query_qualities) else 0
 
                     # Check base quality
@@ -384,7 +379,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
         # Calculate total skipped
         total_skipped = skipped_wrong_strand + skipped_unmapped_dup_secondary + skipped_missing_tags + skipped_no_sequence
-
+        
         # Log read processing statistics
         if total_reads > 0:
             logger.info(
@@ -668,9 +663,7 @@ def count_mutations(
         total_processed = 0
         total_counts = 0
         total_skipped = 0
-        total_reads_fetched = 0
-        total_reads_processed = 0
-        total_reads_skipped = 0
+        total_reads = 0
         all_results = []
         all_timings: list[dict[str, float]] = []
 
@@ -723,9 +716,7 @@ def count_mutations(
                         else:
                             total_counts += len(result["counts"])
                         # Accumulate reads and timing
-                        total_reads_fetched += result.get("total_reads", 0)
-                        total_reads_processed += result.get("reads", 0)
-                        total_reads_skipped += result.get("skipped_reads", 0)
+                        total_reads += result.get("reads", 0)
                         if result.get("timings"):
                             all_timings.append(result["timings"])
 
@@ -743,7 +734,7 @@ def count_mutations(
                         )
 
                     # Update progress
-                    progress.update(task, advance=1, counts=total_counts, reads=total_reads_processed)
+                    progress.update(task, advance=1, counts=total_counts, reads=total_reads)
 
         # Write results to file if specified
         if output_file:
@@ -758,10 +749,6 @@ def count_mutations(
         print(f"   Regions processed: {total_processed}")
         print(f"   Regions skipped (no reads): {total_skipped}")
         print(f"   Total mutations found: {total_counts}")
-        print(f"   📊 Reads: Fetched={total_reads_fetched:,}, Processed={total_reads_processed:,}, Skipped={total_reads_skipped:,}")
-        if total_reads_fetched > 0:
-            skip_rate = (total_reads_skipped / total_reads_fetched) * 100
-            print(f"   📉 Skip rate: {skip_rate:.1f}%")
         print(f"   Time elapsed: {elapsed_time:.2f}s")
         print(f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec")
         if total_skipped > 0:
