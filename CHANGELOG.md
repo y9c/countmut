@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2025-10-24
+
+### Fixed
+- **Critical bug fix: Strand-aware trimming** - Trimming now correctly respects fragment orientation
+  - Forward strand (+): `trim_start` from beginning (5'), `trim_end` from end (3')
+  - Reverse strand (-): `trim_start` from END (5'), `trim_end` from BEGINNING (3')
+  - Previous behavior incorrectly applied uniform trimming regardless of strand
+- Fixed off-by-one error in trim logic: `>` changed to `>=` for correct base counting
+  - `trim_start=2` now correctly skips 2 bases (not 3)
+
+### Changed
+- Enhanced code comments explaining fragment orientation vs genomic mapping
+- Clarified documentation that trimming is based on **fragment orientation** (5'→3' of molecule)
+
+### Why This Matters
+For bisulfite sequencing, enzymatic/adapter artifacts occur at the molecular ends of DNA fragments:
+- Reverse-strand fragments have 5' molecular end at the END of the read sequence
+- Trimming must respect fragment biology, not genome coordinates
+- Critical for accurate analysis of eTAM-seq, GLORI-seq, CAM-seq, and BS-seq data
+
 ## [0.0.3] - 2025-10-24
 
 ### Changed
