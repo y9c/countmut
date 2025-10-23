@@ -4,9 +4,9 @@
 [![Downloads](https://img.shields.io/pepy/dt/countmut)](https://pepy.tech/project/countmut)
 [![Development Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/y9c/countmut)
 
-**Ultra-fast strand-aware mutation counter**
+> **Ultra-fast strand-aware mutation counter for bisulfite sequencing analysis**
 
-CountMut counts mutations from bisulfite sequencing / CAM-seq / GLORI-seq / eTAM-seq BAM files with parallel processing, quality-based mate overlap deduplication, and optimized file I/O.
+CountMut is a high-performance tool for counting mutations from bisulfite sequencing BAM files (BS-seq, CAM-seq, GLORI-seq, eTAM-seq). It features parallel processing, quality-based mate overlap deduplication, and optimized file I/O for maximum speed.
 
 ## Features
 
@@ -72,7 +72,7 @@ countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-co
 
 **Output Records**
 ```bash
---pad INTEGER          Motif window half-size [default: 15]
+-p, --pad INTEGER      Motif window half-size [default: 15]
 -s, --save-rest        Include other bases (o0, o1, o2 columns)
 ```
 
@@ -81,16 +81,22 @@ countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-co
 
 ## Output Format
 
-TSV file with columns:
-- `chrom`, `pos`, `strand`, `motif` - Position and sequence context
-- `u0`, `u1`, `u2` - Unconverted (reference base) counts [drop, clean, unconverted]
-- `m0`, `m1`, `m2` - Mutation (mutation base only) counts [drop, clean, unconverted]
-- `o0`, `o1`, `o2` - Other bases counts [drop, clean, unconverted] (only with `--save-rest`)
+TSV file with the following columns:
 
-Where:
-- **drop** (x0): Bases failing quality filters (internal position, mismatch, mapq, baseq)
-- **clean** (x1): High-quality bases passing all filters
-- **unconverted** (x2): Bases in unconverted reads (high Zf or low Yf)
+| Column | Description |
+|--------|-------------|
+| `chrom` | Chromosome name |
+| `pos` | Genomic position (1-based) |
+| `strand` | Strand (+ or -) |
+| `motif` | Sequence context (2×pad+1 bp window) |
+| `u0`, `u1`, `u2` | **Unconverted** (reference base) counts |
+| `m0`, `m1`, `m2` | **Mutation** (mutation base only) counts |
+| `o0`, `o1`, `o2` | **Other bases** counts (with `--save-rest`) |
+
+**Count categories** (x0, x1, x2):
+- **x0 (drop)**: Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
+- **x1 (clean)**: High-quality bases passing all filters
+- **x2 (unconverted)**: Bases in unconverted reads (high Zf or low Yf)
 
 
 &nbsp;

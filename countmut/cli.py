@@ -64,6 +64,10 @@ click.rich_click.OPTION_GROUPS = {
             "options": ["--pad", "--save-rest"],
         },
         {
+            "name": "Performance Options",
+            "options": ["--threads", "--bin-size"],
+        },
+        {
             "name": "Help & Version",
             "options": ["--help", "--version"],
         },
@@ -177,7 +181,7 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     "-s",
     "--save-rest",
     is_flag=True,
-    help="[bold]Save additional statistics[/bold] including y0, y1, y2 columns",
+    help="[bold]Save other bases[/bold] statistics (o0, o1, o2 columns)",
 )
 @click.option(
     "--region",
@@ -198,6 +202,7 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     help="[bold]Strand processing[/bold]: 'both' (default), 'forward' (+ only), or 'reverse' (- only)",
 )
 @click.option(
+    "-p",
     "--pad",
     type=int,
     default=15,
