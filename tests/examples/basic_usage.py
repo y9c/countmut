@@ -18,7 +18,9 @@ from tests.test_utils import create_test_bam, create_test_fasta
 
 def create_example_bam(output_path: str, num_reads: int = 1000):
     """Create an example BAM file for testing."""
-    create_test_bam(output_path, num_reads=num_reads, chrom_length=100000, read_length=100)
+    create_test_bam(
+        output_path, num_reads=num_reads, chrom_length=100000, read_length=100
+    )
 
 
 def create_example_fasta(output_path: str, length: int = 100000):
@@ -48,7 +50,7 @@ def example_basic_usage():
             ref_base="A",
             mut_base="G",
             bin_size=5000,
-            threads=4
+            threads=4,
         )
 
         if success:
@@ -58,7 +60,7 @@ def example_basic_usage():
             # Show first few lines of output
             with open(output_path) as f:
                 lines = f.readlines()
-                print(f"📊 Found {len(lines)-1} mutation sites")
+                print(f"📊 Found {len(lines) - 1} mutation sites")
                 print("First few lines:")
                 for line in lines[:5]:
                     print(f"  {line.strip()}")
@@ -89,7 +91,7 @@ def example_bisulfite_analysis():
             mut_base="T",
             bin_size=10000,
             threads=4,
-            save_rest=True  # Save additional statistics
+            save_rest=True,  # Save additional statistics
         )
 
         if success:
@@ -122,7 +124,7 @@ def example_region_specific():
             mut_base="G",
             region="chr1:20000-80000",  # Specific region
             bin_size=5000,
-            threads=4
+            threads=4,
         )
 
         if success:
@@ -150,6 +152,7 @@ def example_performance_comparison():
 
         for threads in thread_counts:
             import time
+
             start_time = time.time()
 
             success = count_mutations(
@@ -159,7 +162,7 @@ def example_performance_comparison():
                 ref_base="A",
                 mut_base="G",
                 bin_size=10000,
-                threads=threads
+                threads=threads,
             )
 
             elapsed_time = time.time() - start_time
@@ -186,6 +189,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Error running examples: {e}")
         import traceback
+
         traceback.print_exc()
 
 

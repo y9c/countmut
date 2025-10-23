@@ -3,7 +3,6 @@
 Create a subset BAM file with only rRNA chromosomes for testing.
 """
 
-
 import pysam
 
 
@@ -21,8 +20,8 @@ def create_subset_bam(input_bam, output_bam, target_chroms):
         # Add only target chromosomes to header
         for chrom in target_chroms:
             # Find the chromosome in original header
-            for sq in infile.header['SQ']:
-                if sq['SN'] == chrom:
+            for sq in infile.header["SQ"]:
+                if sq["SN"] == chrom:
                     new_sq.append(sq)
                     print(f"✅ Added chromosome: {sq['SN']} (length: {sq['LN']})")
                     break
@@ -30,7 +29,7 @@ def create_subset_bam(input_bam, output_bam, target_chroms):
                 print(f"⚠️  Warning: Chromosome {chrom} not found in original BAM")
 
         # Update header with filtered chromosomes
-        header_dict['SQ'] = new_sq
+        header_dict["SQ"] = new_sq
         new_header = pysam.AlignmentHeader.from_dict(header_dict)
 
         # Create output BAM file
@@ -55,12 +54,13 @@ def create_subset_bam(input_bam, output_bam, target_chroms):
             print("✅ Completed!")
             print(f"   Total reads processed: {total_reads:,}")
             print(f"   Reads kept: {kept_reads:,}")
-            print(f"   Kept ratio: {kept_reads/total_reads*100:.1f}%")
+            print(f"   Kept ratio: {kept_reads / total_reads * 100:.1f}%")
 
     # Create index for the new BAM file
     print("📝 Creating BAM index...")
     pysam.index(output_bam)
     print(f"✅ Index created: {output_bam}.bai")
+
 
 if __name__ == "__main__":
     input_bam = "/home/yec/Desktop/S818.genes.bam"
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     target_chroms = [
         "rRNA-Hsa-nucleus_locus",
         "rRNA-Hsa-mitochrondria_locus",
-        "rRNA-Hsa-5S"
+        "rRNA-Hsa-5S",
     ]
 
     print("🧬 Creating rRNA subset BAM file")

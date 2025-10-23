@@ -35,6 +35,7 @@ if not logger.handlers:
 # DNA complement mapping for reverse complement
 DNA_COMPLEMENT = str.maketrans("ATGCNatgcn", "TACGNtacgn")
 
+
 # Determine the biological strand for a read
 def determine_actual_strand(read: pysam.AlignedSegment) -> str:
     """Return '+' or '-' as the biological strand for the read.
@@ -52,6 +53,7 @@ def determine_actual_strand(read: pysam.AlignedSegment) -> str:
         return "+" if not read.is_reverse else "-"
     except Exception:
         return "+"
+
 
 # Global per-process file handles initialized once per worker process
 _GLOBAL_SAM = None
@@ -200,9 +202,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         target_seq = reffile.fetch(region_chrom, region_start, region_end)
         target_sites_set = {
             i
-            for i, b in zip(
-                range(region_start, region_end), target_seq, strict=False
-            )
+            for i, b in zip(range(region_start, region_end), target_seq, strict=False)
             if b.upper() == ref_base
         }
         target_sites_list = sorted(target_sites_set)
@@ -254,16 +254,16 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         position_data = {}
         for pos in target_sites_list:
             position_data[pos] = {
-                '+': {
-                    'clean_count': Counter(),
-                    'unc_count': Counter(),
-                    'drop_count': Counter()
+                "+": {
+                    "clean_count": Counter(),
+                    "unc_count": Counter(),
+                    "drop_count": Counter(),
                 },
-                '-': {
-                    'clean_count': Counter(),
-                    'unc_count': Counter(),
-                    'drop_count': Counter()
-                }
+                "-": {
+                    "clean_count": Counter(),
+                    "unc_count": Counter(),
+                    "drop_count": Counter(),
+                },
             }
 
         # Process all reads in the region
@@ -297,7 +297,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     continue
 
                 # Get read properties (avoid exceptions on missing tags)
-                if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
+                if not (
+                    read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")
+                ):
                     skipped_missing_tags += 1
                     continue
 
@@ -339,7 +341,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     )
                     # Get query base from read sequence (base_char is reference base, not query)
                     query_base = query_sequence[query_pos].upper()
-                    base_qual = int(query_qualities[query_pos]) if query_qualities and query_pos < len(query_qualities) else 0
+                    base_qual = (
+                        int(query_qualities[query_pos])
+                        if query_qualities and query_pos < len(query_qualities)
+                        else 0
+                    )
 
                     # Check base quality
                     passes_baseq_filter = base_qual >= min_baseq
@@ -349,7 +355,16 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     key = (ref_pos, read.query_name)
                     prev = best_obs.get(key)
                     if (prev is None) or (base_qual > prev[2]):
-                        best_obs[key] = (actual_strand, query_base, base_qual, bool(is_internal), bool(passes_mismatch_filter), bool(passes_mapq_filter), bool(passes_baseq_filter), bool(is_converted))
+                        best_obs[key] = (
+                            actual_strand,
+                            query_base,
+                            base_qual,
+                            bool(is_internal),
+                            bool(passes_mismatch_filter),
+                            bool(passes_mapq_filter),
+                            bool(passes_baseq_filter),
+                            bool(is_converted),
+                        )
 
             except (KeyError, AttributeError) as e:
                 # Skip reads with missing tags or invalid data
@@ -357,23 +372,44 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 continue
 
         # Apply best observations to position counts (deduplicated across overlapping mates)
-        for (ref_pos, _qname), (strand_symbol, query_base, _q, is_internal, passes_mismatch_filter, passes_mapq_filter, passes_baseq_filter, is_converted) in best_obs.items():
+        for (ref_pos, _qname), (
+            strand_symbol,
+            query_base,
+            _q,
+            is_internal,
+            passes_mismatch_filter,
+            passes_mapq_filter,
+            passes_baseq_filter,
+            is_converted,
+        ) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
                 continue
 
             # Count in drop_count if ANY quality filter fails
-            if not (is_internal and passes_mismatch_filter and passes_mapq_filter and passes_baseq_filter):
-                position_data[ref_pos][strand_symbol]['drop_count'][query_base] += 1
+            if not (
+                is_internal
+                and passes_mismatch_filter
+                and passes_mapq_filter
+                and passes_baseq_filter
+            ):
+                position_data[ref_pos][strand_symbol]["drop_count"][query_base] += 1
             # Count in clean_count/unc_count only if ALL quality filters pass
             else:
                 if is_converted:
-                    position_data[ref_pos][strand_symbol]['clean_count'][query_base] += 1
+                    position_data[ref_pos][strand_symbol]["clean_count"][
+                        query_base
+                    ] += 1
                 else:
-                    position_data[ref_pos][strand_symbol]['unc_count'][query_base] += 1
+                    position_data[ref_pos][strand_symbol]["unc_count"][query_base] += 1
 
         # Calculate total skipped
-        total_skipped = skipped_wrong_strand + skipped_unmapped_dup_secondary + skipped_missing_tags + skipped_no_sequence
+        total_skipped = (
+            skipped_wrong_strand
+            + skipped_unmapped_dup_secondary
+            + skipped_missing_tags
+            + skipped_no_sequence
+        )
 
         # Log read processing statistics
         if total_reads > 0:
@@ -390,16 +426,16 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
         # Process each target position for each strand
         for pos in target_sites_list:
-            for strand_symbol in ['+', '-']:
+            for strand_symbol in ["+", "-"]:
                 # Skip if we don't want to process this strand
                 if process_forward_only and strand_symbol != "+":
                     continue
                 if process_reverse_only and strand_symbol != "-":
                     continue
 
-                clean_count = position_data[pos][strand_symbol]['clean_count']
-                unc_count = position_data[pos][strand_symbol]['unc_count']
-                drop_count = position_data[pos][strand_symbol]['drop_count']
+                clean_count = position_data[pos][strand_symbol]["clean_count"]
+                unc_count = position_data[pos][strand_symbol]["unc_count"]
+                drop_count = position_data[pos][strand_symbol]["drop_count"]
 
                 # Get motif
                 motif = extended_target_seq[
@@ -567,7 +603,9 @@ def count_mutations(
         bam_chroms = list(samfile_open.references)
         samfile_open.close()
 
-        print(f"🔍 Filtering chromosomes: {len(bam_chroms)} in BAM, {len(ref_chrom_lengths)} in reference")
+        print(
+            f"🔍 Filtering chromosomes: {len(bam_chroms)} in BAM, {len(ref_chrom_lengths)} in reference"
+        )
 
         bin_list = []
 
@@ -603,11 +641,15 @@ def count_mutations(
                     bin_start += bin_size
 
             if missing_in_ref:
-                print(f"⚠️  {len(missing_in_ref)} BAM chromosomes not found in reference")
+                print(
+                    f"⚠️  {len(missing_in_ref)} BAM chromosomes not found in reference"
+                )
                 if len(missing_in_ref) <= 10:
                     print(f"   Missing: {', '.join(missing_in_ref)}")
                 else:
-                    print(f"   Missing: {', '.join(missing_in_ref[:10])} ... and {len(missing_in_ref)-10} more")
+                    print(
+                        f"   Missing: {', '.join(missing_in_ref[:10])} ... and {len(missing_in_ref) - 10} more"
+                    )
 
             print(f"✅ Processing {len(valid_chroms)} valid chromosomes")
 
@@ -621,7 +663,9 @@ def count_mutations(
         process_reverse_only = strand.lower() == "reverse"
 
         if not any([process_both_strands, process_forward_only, process_reverse_only]):
-            print(f"❌ Invalid strand option '{strand}'. Must be 'both', 'forward', or 'reverse'")
+            print(
+                f"❌ Invalid strand option '{strand}'. Must be 'both', 'forward', or 'reverse'"
+            )
             return False
 
         # Use all regions for now (pre-filtering can be added later)
@@ -668,10 +712,13 @@ def count_mutations(
             print("\t".join(headers))
             # Flush to ensure immediate output
             import sys
+
             sys.stdout.flush()
 
         print(f"🚀 Processing {len(worker_args)} regions with {threads} threads...")
-        print(f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})")
+        print(
+            f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})"
+        )
 
         with Progress(
             "[progress.description]{task.description}",
@@ -684,15 +731,16 @@ def count_mutations(
             expand=False,
         ) as progress:
             task = progress.add_task(
-                "🔄 Processing regions...",
-                total=len(worker_args),
-                counts=0,
-                reads=0
+                "🔄 Processing regions...", total=len(worker_args), counts=0, reads=0
             )
 
             # Use ProcessPoolExecutor for optimal parallelism
             # This automatically handles load balancing and memory management
-            with ProcessPoolExecutor(max_workers=threads, initializer=_init_worker, initargs=(samfile, reffile)) as executor:
+            with ProcessPoolExecutor(
+                max_workers=threads,
+                initializer=_init_worker,
+                initargs=(samfile, reffile),
+            ) as executor:
                 # Submit all tasks at once for maximum parallelism
                 future_to_args = {
                     executor.submit(parse_region_worker, args): args
@@ -729,7 +777,9 @@ def count_mutations(
                         )
 
                     # Update progress
-                    progress.update(task, advance=1, counts=total_counts, reads=total_reads)
+                    progress.update(
+                        task, advance=1, counts=total_counts, reads=total_reads
+                    )
 
         # Write results to file if specified
         if output_file:
@@ -761,5 +811,3 @@ def count_mutations(
         logger.error(f"Error during processing: {e}")
         print(f"❌ Processing failed: {e}")
         return False
-
-

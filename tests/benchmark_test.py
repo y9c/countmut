@@ -11,13 +11,21 @@ def run_benchmark(region_size, iterations=3):
     """Run benchmark with different region sizes."""
 
     base_cmd = [
-        "uv", "run", "countmut",
-        "-i", "/home/yec/Desktop/S818.genes.bam",
-        "-r", "/home/yec/Desktop/genes.fa",
-        "--ref-base", "A",
-        "--mut-base", "G",
-        "--strand", "forward",
-        "--region", f"rRNA-Hsa-nucleus_locus:1-{region_size}"
+        "uv",
+        "run",
+        "countmut",
+        "-i",
+        "/home/yec/Desktop/S818.genes.bam",
+        "-r",
+        "/home/yec/Desktop/genes.fa",
+        "--ref-base",
+        "A",
+        "--mut-base",
+        "G",
+        "--strand",
+        "forward",
+        "--region",
+        f"rRNA-Hsa-nucleus_locus:1-{region_size}",
     ]
 
     print(f"🧬 Benchmarking region size: {region_size} bp")
@@ -25,21 +33,17 @@ def run_benchmark(region_size, iterations=3):
 
     times = []
     for i in range(iterations):
-        print(f"Run {i+1}/{iterations}...")
+        print(f"Run {i + 1}/{iterations}...")
         start_time = time.time()
 
-        result = subprocess.run(
-            base_cmd,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(base_cmd, capture_output=True, text=True)
 
         end_time = time.time()
         elapsed = end_time - start_time
         times.append(elapsed)
 
         if result.returncode != 0:
-            print(f"❌ Error in run {i+1}: {result.stderr}")
+            print(f"❌ Error in run {i + 1}: {result.stderr}")
             return None
 
         print(f"   Time: {elapsed:.2f}s")
@@ -49,9 +53,10 @@ def run_benchmark(region_size, iterations=3):
     print(f"   Average time: {avg_time:.2f}s")
     print(f"   Min time: {min(times):.2f}s")
     print(f"   Max time: {max(times):.2f}s")
-    print(f"   Processing rate: {region_size/avg_time:.0f} bp/s")
+    print(f"   Processing rate: {region_size / avg_time:.0f} bp/s")
 
     return avg_time
+
 
 if __name__ == "__main__":
     print("🚀 CountMut Read-Based Processing Benchmark")

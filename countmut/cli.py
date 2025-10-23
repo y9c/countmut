@@ -65,7 +65,6 @@ def validate_bam_file(bam_file: str, threads: int = 1) -> bool:
         return False
 
 
-
 @click.command(
     name="countmut",
     no_args_is_help=True,
@@ -218,7 +217,13 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     show_default=True,
     help="[bold]Min mapping quality[/bold] (MAPQ) to count reads",
 )
-@click.version_option(importlib_metadata.version("countmut"), "--version", "-v", prog_name="countmut", message="%(prog)s %(version)s")
+@click.version_option(
+    importlib_metadata.version("countmut"),
+    "--version",
+    "-v",
+    prog_name="countmut",
+    message="%(prog)s %(version)s",
+)
 def main(
     samfile: str,
     reffile: str,
@@ -394,7 +399,9 @@ def main(
 
         if success:
             _duration = time.time() - _start_time
-            console.print(f"✅ Mutation counting completed successfully! (⏱️ {format_duration(_duration)})")
+            console.print(
+                f"✅ Mutation counting completed successfully! (⏱️ {format_duration(_duration)})"
+            )
             if output:
                 console.print(f"📄 Results saved to: {output}")
         else:

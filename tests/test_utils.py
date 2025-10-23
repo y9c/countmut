@@ -1,7 +1,5 @@
 """Tests for utility functions."""
 
-
-
 from countmut.utils import format_duration, get_output_headers, write_output
 
 
