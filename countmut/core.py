@@ -267,28 +267,44 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             }
 
         # Process all reads in the region
-        read_count = 0
+        total_reads = 0
+        skipped_wrong_strand = 0
+        skipped_unmapped_dup_secondary = 0
+        skipped_missing_tags = 0
+        skipped_no_sequence = 0
+        processed_reads = 0
+
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
         # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
         best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
         for read in samfile.fetch(region_chrom, region_start, region_end):
-            read_count += 1
+            total_reads += 1
             try:
                 # Determine which strand to process based on read orientation
                 actual_strand = determine_actual_strand(read)
 
                 # Skip if we don't want to process this strand
                 if process_forward_only and actual_strand != "+":
+                    skipped_wrong_strand += 1
                     continue
                 if process_reverse_only and actual_strand != "-":
+                    skipped_wrong_strand += 1
                     continue
 
                 # Skip reads with deletions or reference skips
                 if read.is_unmapped or read.is_duplicate or read.is_secondary:
+                    skipped_unmapped_dup_secondary += 1
+                    continue
+
+                # Skip reads without sequence
+                query_sequence = read.query_sequence
+                if not query_sequence:
+                    skipped_no_sequence += 1
                     continue
 
                 # Get read properties (avoid exceptions on missing tags)
                 if not (read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")):
+                    skipped_missing_tags += 1
                     continue
 
                 # Check mapping quality
@@ -303,11 +319,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 yf = read.get_tag("Yf")
                 is_converted = (zf <= max_unc) and (yf >= min_con)
 
-                # Process each position in the read
-                query_sequence = read.query_sequence
-                if not query_sequence:
-                    continue
+                # Get base qualities
                 query_qualities = read.query_qualities or []
+
+                # Mark this read as successfully processed
+                processed_reads += 1
 
                 # Iterate via reference positions (fast path) and filter
                 for tup in read.get_aligned_pairs(matches_only=True, with_seq=True):
@@ -366,12 +382,21 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 else:
                     position_data[ref_pos][strand_symbol]['unc_count'][query_base] += 1
 
-        # Debug: Log read processing info
-        logger.debug(f"Processed {read_count} reads for region {region_chrom}:{region_start}-{region_end}:{strand_option}")
+        # Calculate total skipped
+        total_skipped = skipped_wrong_strand + skipped_unmapped_dup_secondary + skipped_missing_tags + skipped_no_sequence
 
-        # Performance info
-        if read_count > 0:
-            logger.info(f"⚡ Read-based processing: {read_count} reads processed for {len(target_sites_list)} target positions")
+        # Log read processing statistics
+        if total_reads > 0:
+            logger.info(
+                f"📊 Region {region_chrom}:{region_start}-{region_end}:{strand_option} - "
+                f"Total: {total_reads}, Processed: {processed_reads}, Skipped: {total_skipped}"
+            )
+            if total_skipped > 0:
+                logger.debug(
+                    f"   Skipped details: wrong_strand={skipped_wrong_strand}, "
+                    f"unmapped/dup/secondary={skipped_unmapped_dup_secondary}, "
+                    f"missing_tags={skipped_missing_tags}, no_sequence={skipped_no_sequence}"
+                )
 
         # Process each target position for each strand
         for pos in target_sites_list:
@@ -420,7 +445,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "counts": counts,
             "success": True,
             "error": None,
-            "reads": read_count,
+            "reads": processed_reads,
+            "total_reads": total_reads,
+            "skipped_reads": total_skipped,
             "timings": {"total": time.time() - overall_start},
         }
 
@@ -641,7 +668,9 @@ def count_mutations(
         total_processed = 0
         total_counts = 0
         total_skipped = 0
-        total_reads = 0
+        total_reads_fetched = 0
+        total_reads_processed = 0
+        total_reads_skipped = 0
         all_results = []
         all_timings: list[dict[str, float]] = []
 
@@ -694,7 +723,9 @@ def count_mutations(
                         else:
                             total_counts += len(result["counts"])
                         # Accumulate reads and timing
-                        total_reads += result.get("reads", 0)
+                        total_reads_fetched += result.get("total_reads", 0)
+                        total_reads_processed += result.get("reads", 0)
+                        total_reads_skipped += result.get("skipped_reads", 0)
                         if result.get("timings"):
                             all_timings.append(result["timings"])
 
@@ -712,7 +743,7 @@ def count_mutations(
                         )
 
                     # Update progress
-                    progress.update(task, advance=1, counts=total_counts, reads=total_reads)
+                    progress.update(task, advance=1, counts=total_counts, reads=total_reads_processed)
 
         # Write results to file if specified
         if output_file:
@@ -727,6 +758,10 @@ def count_mutations(
         print(f"   Regions processed: {total_processed}")
         print(f"   Regions skipped (no reads): {total_skipped}")
         print(f"   Total mutations found: {total_counts}")
+        print(f"   📊 Reads: Fetched={total_reads_fetched:,}, Processed={total_reads_processed:,}, Skipped={total_reads_skipped:,}")
+        if total_reads_fetched > 0:
+            skip_rate = (total_reads_skipped / total_reads_fetched) * 100
+            print(f"   📉 Skip rate: {skip_rate:.1f}%")
         print(f"   Time elapsed: {elapsed_time:.2f}s")
         print(f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec")
         if total_skipped > 0:
