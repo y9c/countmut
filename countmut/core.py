@@ -13,7 +13,6 @@ import atexit
 import glob
 import logging
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -52,16 +51,13 @@ def determine_actual_strand(read: pysam.AlignedSegment) -> str:
     For paired-end reads: read1 forward = '+', read2 reverse = '+' (mirror logic),
     otherwise '-' respectively. For single-end, use read.is_reverse.
     """
-    try:
-        if read.is_paired:
-            if read.is_read1:
-                return "+" if not read.is_reverse else "-"
-            # read2: reverse complemented indicates '+'
-            return "+" if read.is_reverse else "-"
-        # single-end
-        return "+" if not read.is_reverse else "-"
-    except Exception:
-        return "+"
+    if read.is_paired:
+        if read.is_read1:
+            return "+" if not read.is_reverse else "-"
+        # read2: reverse complemented indicates '+'
+        return "+" if read.is_reverse else "-"
+    # single-end
+    return "+" if not read.is_reverse else "-"
 
 
 # Global per-process file handles initialized once per worker process
@@ -189,12 +185,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
     """
     Worker function for parsing a single genomic region.
 
-    This function is designed to be completely thread-safe by:
-    1. Opening its own file handles
-    2. Not sharing any global state
-    3. Returning results instead of writing to shared files
-    4. Proper error handling and cleanup
-    5. Processing both strands in one pass for efficiency
+    This function is designed to be completely thread-safe and optimized by:
+    1. Using per-process global file handles initialized by the pool's initializer
+    2. Not sharing any mutable global state between workers
+    3. Returning results instead of writing to a shared file/queue
+    4. Processing both strands in one pass for efficiency
     """
     try:
         overall_start = time.time()
@@ -357,7 +352,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
         for read in reads_to_process:
             total_reads += 1
-            # Removed: read_contributes_to_counts = False # Flag no longer needed
             try:
                 actual_strand = determine_actual_strand(read)
                 # If tagging is enabled, count alternative mutations and update tags
@@ -1187,42 +1181,32 @@ def _final_bam_processing(
     """
     Handles merging, sorting, and indexing of temporary BAM files.
     """
-    if tagging_enabled:
-        logger.info(f"Merging {len(os.listdir(temp_dir))} temporary BAM files...")
+    if tagging_enabled and output_bam:
+        # Glob all shard files from the temporary directory
+        shard_files = glob.glob(os.path.join(temp_dir, "shard_*.bam"))
+        if not shard_files:
+            logger.warning("No temporary BAM files found to merge.")
+            return
 
-        final_tagged_bam = (
-            output_bam or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
-        )
+        logger.info(f"Merging {len(shard_files)} temporary BAM files...")
+        final_tagged_bam = output_bam
 
         try:
             # Use pysam cat for robust merging
-            # This glob pattern should pick up all shard_*.bam files created by workers
-            pysam.cat(
-                "-o",
-                final_tagged_bam,
-                *glob.glob(os.path.join(temp_dir, "shard_*.bam")),
-            )
+            pysam.cat("-o", final_tagged_bam, *shard_files)
 
             logger.info("Sorting and indexing final BAM...")
-            sorted_bam_path = final_tagged_bam + ".sorted"
+            sorted_bam_path = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".bam", dir=os.path.dirname(output_bam)
+            ).name
             pysam.sort("-@", str(threads), "-o", sorted_bam_path, final_tagged_bam)
             os.replace(sorted_bam_path, final_tagged_bam)
             pysam.index(final_tagged_bam)
 
             logger.info(f"✅ Final tagged BAM created: {final_tagged_bam}")
 
-            if not output_bam:
-                _temp_files_to_clean.add(final_tagged_bam)
-                _temp_files_to_clean.add(final_tagged_bam + ".bai")
-
         except Exception as e:
-            logger.error(f"❌ Failed during BAM processing: {e}")
+            logger.error(f"❌ Failed during final BAM processing: {e}")
         finally:
-            # Clean up the shard directory as it's no longer needed
-            try:
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-            except Exception as e:
-                logger.warning(
-                    f"⚠️  Warning: Could not remove temporary directory {temp_dir}: {e}"
-                )
+            # The temporary directory is automatically cleaned up by the context manager
+            pass
