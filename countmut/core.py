@@ -326,6 +326,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_no_sequence = 0
         processed_reads = 0
 
+        # Initialize is_skipped and total_skipped_reads for the worker result
+        is_skipped = False
+        total_skipped_reads = 0
+
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
         # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
         best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
@@ -533,20 +537,23 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     ][query_base] += 1
 
         # Calculate total skipped
-        total_skipped = (
+        total_skipped_reads = (
             skipped_wrong_strand
             + skipped_unmapped_dup_secondary
             + skipped_missing_tags
             + skipped_no_sequence
         )
+        # A region is considered skipped if no reads were successfully processed through all filters
+        if processed_reads == 0:
+            is_skipped = True
 
         # Log read processing statistics
         if total_reads > 0:
             logger.info(
                 f"📊 Region {region_chrom}:{region_start}-{region_end}:{strand_option} - "
-                f"Total: {total_reads}, Processed: {processed_reads}, Skipped: {total_skipped}"
+                f"Total: {total_reads}, Processed: {processed_reads}, Skipped: {total_skipped_reads}"
             )
-            if total_skipped > 0:
+            if total_skipped_reads > 0:
                 logger.debug(
                     f"   Skipped details: wrong_strand={skipped_wrong_strand}, "
                     f"unmapped/dup/secondary={skipped_unmapped_dup_secondary}, "
@@ -603,17 +610,25 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         if outfile:
             outfile.close()
 
+        # Return results to the main process
         return {
             "worker_id": worker_id,
-            "region": f"{region_chrom}:{region_start}-{region_end}:{strand_option}",
-            "counts": counts,
             "success": True,
             "error": None,
+            "region": f"{region_chrom}:{region_start}-{region_end}:{strand_option}",
+            "counts": counts,  # Use the 'counts' list generated in the worker
             "reads": processed_reads,
-            "total_reads": total_reads,
-            "skipped_reads": total_skipped,
-            "temp_bam_path": _WORKER_SHARD_PATH,
-            "timings": {"total": time.time() - overall_start},
+            "total_reads": total_reads,  # Total reads for this region
+            "skipped": is_skipped,  # Correctly reflect if the region was skipped
+            "skipped_reads": total_skipped_reads,  # Total reads skipped in this region
+            "skipped_wrong_strand": skipped_wrong_strand,
+            "skipped_unmapped_dup_secondary": skipped_unmapped_dup_secondary,
+            "skipped_missing_tags": skipped_missing_tags,
+            "skipped_no_sequence": skipped_no_sequence,
+            "temp_bam_path": _WORKER_SHARD_PATH,  # Path to the temporary BAM file for this worker
+            "timings": {
+                "total": time.time() - overall_start
+            },  # Use the already constructed timings dictionary
         }
 
     except Exception as e:
@@ -903,6 +918,11 @@ def count_mutations(
             total_reads_skipped_all_workers = (
                 0  # Accumulate skipped reads from all workers
             )
+            # Detailed skipped read counts across all workers
+            total_skipped_wrong_strand_agg = 0
+            total_skipped_unmapped_dup_secondary_agg = 0
+            total_skipped_missing_tags_agg = 0
+            total_skipped_no_sequence_agg = 0
             all_results = []
             all_timings: list[dict[str, float]] = []
 
@@ -979,6 +999,20 @@ def count_mutations(
                                 "skipped_reads", 0
                             )
 
+                            # Accumulate detailed skipped read counts
+                            total_skipped_wrong_strand_agg += result.get(
+                                "skipped_wrong_strand", 0
+                            )
+                            total_skipped_unmapped_dup_secondary_agg += result.get(
+                                "skipped_unmapped_dup_secondary", 0
+                            )
+                            total_skipped_missing_tags_agg += result.get(
+                                "skipped_missing_tags", 0
+                            )
+                            total_skipped_no_sequence_agg += result.get(
+                                "skipped_no_sequence", 0
+                            )
+
                             if result.get("timings"):
                                 all_timings.append(result["timings"])
 
@@ -1033,6 +1067,13 @@ def count_mutations(
             logger.info(
                 f"   Total reads skipped: {total_reads_skipped_all_workers}"
             )  # New summary stat
+            if total_reads_skipped_all_workers > 0:
+                logger.info(
+                    f"      Skipped details: wrong_strand={total_skipped_wrong_strand_agg}, "
+                    f"unmapped/dup/secondary={total_skipped_unmapped_dup_secondary_agg}, "
+                    f"missing_tags={total_skipped_missing_tags_agg}, "
+                    f"no_sequence={total_skipped_no_sequence_agg}"
+                )
             logger.info(f"   Total mutations found: {total_counts}")
             logger.info(f"   Time elapsed: {elapsed_time:.2f}s")
             logger.info(
