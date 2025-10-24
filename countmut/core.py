@@ -982,11 +982,6 @@ def count_mutations(
                     # Explicitly shut down the executor after all results are collected
                     executor.shutdown(wait=True)
 
-                    # Now, submit shutdown tasks to trigger graceful closing of worker writers
-                    # This needs a new executor if the old one is already shut down.
-                    # However, for `ProcessPoolExecutor`, `shutdown()` waits for all tasks to complete.
-                    # So, simply calling shutdown after all results are collected should be enough.
-                    # The `_worker_shutdown_task` is now part of atexit, so no explicit submission needed.
                     # We only need to ensure the main executor shuts down properly.
                     pass
 

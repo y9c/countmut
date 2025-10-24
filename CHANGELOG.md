@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2025-10-24
+### Fixed
+- Resolved `UndefinedName` errors by correctly initializing counters and result lists.
+- Fixed `ProcessPoolExecutor` shutdown issue (`cannot schedule new futures after shutdown`).
+- Ensured `Progress` bar displays after worker warmup, improving perceived startup time.
+### Changed
+- Implemented per-process shard files for parallel BAM output, centralizing BAM writing and reducing temporary file creation.
+- Refined worker initialization (`_init_worker`) to use `os.getpid()` for worker IDs and removed redundant `worker_id` passing.
+- Added `countmut_` prefix to temporary directories created by `tempfile.TemporaryDirectory`.
+### Added
+- Introduced worker warmup phase to reduce initial processing delay.
+- `_warmup_worker` and `_worker_shutdown_task` functions for explicit worker lifecycle management.
+
 ## [0.0.5] - 2025-10-24
 
 ### Added
