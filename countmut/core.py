@@ -330,6 +330,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_unmapped = 0 # New: skipped due to unmapped
         skipped_duplicate = 0 # New: skipped due to duplicate
         skipped_secondary = 0 # New: skipped due to secondary
+        skipped_mismatch_filter = 0 # New: skipped due to mismatch filter
+        skipped_mapq_filter = 0 # New: skipped due to mapq filter
+        skipped_conversion_filter = 0 # New: skipped due to conversion filter
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
@@ -432,17 +435,29 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         outfile.write(read)  # Write unmodified read on error
                     continue
 
-                # Check mapping quality
-                passes_mapq_filter = read.mapping_quality >= min_mapq
+                # Check mapping quality (read-level filter)
+                if read.mapping_quality < min_mapq:
+                    skipped_mapq_filter += 1
+                    if outfile:
+                        outfile.write(read) # Write unmodified read
+                    continue
 
-                # Check mismatch filter
+                # Check mismatch filter (read-level filter)
                 ns = read.get_tag("NS")
-                passes_mismatch_filter = ns <= max_sub
+                if ns > max_sub:
+                    skipped_mismatch_filter += 1
+                    if outfile:
+                        outfile.write(read)
+                    continue
 
-                # Check conversion filter (reads passing are sufficiently converted)
+                # Check conversion filter (read-level filter)
                 zf = read.get_tag("Zf")
                 yf = read.get_tag("Yf")
-                passes_conversion_filter = (zf <= max_unc) and (yf >= min_con)
+                if not ((zf <= max_unc) and (yf >= min_con)):
+                    skipped_conversion_filter += 1
+                    if outfile:
+                        outfile.write(read)
+                    continue
 
                 # Process each position in the read
                 query_sequence = read.query_sequence
@@ -498,12 +513,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     key = (ref_pos, read.query_name)
                     prev = best_obs.get(key)
 
-                    # If any of the filters fail, this base is considered dropped (low_quality)
+                    # If any of the remaining filters fail, this base is considered dropped (low_quality)
                     if not (
                         is_internal
-                        and passes_mismatch_filter
-                        and passes_mapq_filter
-                        and passes_baseq_filter
+                        and passes_baseq_filter # Only these two are now base-level filters
                     ):
                         # Even if dropped, we still keep the best observation to correctly populate low_quality_count
                         if (prev is None) or (base_qual > prev[2]):
@@ -512,10 +525,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                 query_base,
                                 base_qual,
                                 False, # is_internal (false if dropped)
-                                False, # passes_mismatch_filter (false if dropped)
-                                False, # passes_mapq_filter (false if dropped)
+                                False, # passes_mismatch_filter (no longer applicable here)
+                                False, # passes_mapq_filter (no longer applicable here)
                                 False, # passes_baseq_filter (false if dropped)
-                                passes_conversion_filter,
+                                False, # passes_conversion_filter (no longer applicable here)
                             )
                         continue # Skip further processing for this base as it's low quality
 
@@ -526,10 +539,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             query_base,
                             base_qual,
                             bool(is_internal),
-                            bool(passes_mismatch_filter),
-                            bool(passes_mapq_filter),
+                            True, # passes_mismatch_filter (always true at this point)
+                            True, # passes_mapq_filter (always true at this point)
                             bool(passes_baseq_filter),
-                            bool(passes_conversion_filter),
+                            True, # passes_conversion_filter (always true at this point)
                         )
                     # Removed: read_contributes_to_counts = True # Flag no longer needed
 
@@ -570,8 +583,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             # Count in low_quality if ANY quality filter fails
             if not (
                 is_internal
-                and passes_mismatch_filter
-                and passes_mapq_filter
                 and passes_baseq_filter
             ):
                 position_data[ref_pos][strand_symbol]["low_quality_count"][
@@ -596,6 +607,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             + skipped_unmapped
             + skipped_duplicate
             + skipped_secondary
+            + skipped_mismatch_filter # New: Include reads skipped by mismatch filter
+            + skipped_mapq_filter # New: Include reads skipped by mapq filter
+            + skipped_conversion_filter # New: Include reads skipped by conversion filter
             + skipped_missing_tags
             + skipped_no_sequence
             # Removed: + reads_with_no_valid_bases # Include reads that passed initial filters but had no valid bases
@@ -669,6 +683,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "skipped_unmapped": skipped_unmapped, # New: individual skipped count
             "skipped_duplicate": skipped_duplicate, # New: individual skipped count
             "skipped_secondary": skipped_secondary, # New: individual skipped count
+            "skipped_mismatch_filter": skipped_mismatch_filter, # New: individual skipped count
+            "skipped_mapq_filter": skipped_mapq_filter, # New: individual skipped count
+            "skipped_conversion_filter": skipped_conversion_filter, # New: individual skipped count
             "skipped_missing_tags": skipped_missing_tags,
             "skipped_no_sequence": skipped_no_sequence,
             # Removed: "reads_with_no_valid_bases": reads_with_no_valid_bases, # New: Detailed skipped count
@@ -974,6 +991,9 @@ def count_mutations(
             total_skipped_unmapped_agg = 0 # New: Aggregated unmapped reads
             total_skipped_duplicate_agg = 0 # New: Aggregated duplicate reads
             total_skipped_secondary_agg = 0 # New: Aggregated secondary reads
+            total_skipped_mismatch_filter_agg = 0 # New: Aggregated mismatch filter skipped reads
+            total_skipped_mapq_filter_agg = 0 # New: Aggregated mapq filter skipped reads
+            total_skipped_conversion_filter_agg = 0 # New: Aggregated conversion filter skipped reads
             total_skipped_missing_tags_agg = 0
             total_skipped_no_sequence_agg = 0
             # Removed: total_reads_with_no_valid_bases_agg = 0 # Accumulator no longer needed
@@ -1076,6 +1096,9 @@ def count_mutations(
                             total_skipped_unmapped_agg += result.get("skipped_unmapped", 0) # New: Accumulate unmapped
                             total_skipped_duplicate_agg += result.get("skipped_duplicate", 0) # New: Accumulate duplicate
                             total_skipped_secondary_agg += result.get("skipped_secondary", 0) # New: Accumulate secondary
+                            total_skipped_mismatch_filter_agg += result.get("skipped_mismatch_filter", 0) # New: Accumulate mismatch filter skipped
+                            total_skipped_mapq_filter_agg += result.get("skipped_mapq_filter", 0) # New: Accumulate mapq filter skipped
+                            total_skipped_conversion_filter_agg += result.get("skipped_conversion_filter", 0) # New: Accumulate conversion filter skipped
                             total_skipped_missing_tags_agg += result.get("skipped_missing_tags", 0)
                             total_skipped_no_sequence_agg += result.get("skipped_no_sequence", 0)
                             # Removed: total_reads_with_no_valid_bases_agg += result.get("reads_with_no_valid_bases", 0) # Accumulate new counter
@@ -1143,6 +1166,9 @@ def count_mutations(
                 "total_skipped_unmapped_agg": total_skipped_unmapped_agg, # New: return aggregated unmapped
                 "total_skipped_duplicate_agg": total_skipped_duplicate_agg, # New: return aggregated duplicate
                 "total_skipped_secondary_agg": total_skipped_secondary_agg, # New: return aggregated secondary
+                "total_skipped_mismatch_filter_agg": total_skipped_mismatch_filter_agg, # New: return aggregated mismatch filter skipped
+                "total_skipped_mapq_filter_agg": total_skipped_mapq_filter_agg, # New: return aggregated mapq filter skipped
+                "total_skipped_conversion_filter_agg": total_skipped_conversion_filter_agg, # New: return aggregated conversion filter skipped
                 "total_skipped_missing_tags_agg": total_skipped_missing_tags_agg,
                 "total_skipped_no_sequence_agg": total_skipped_no_sequence_agg,
                 # Removed: "total_reads_with_no_valid_bases_agg": total_reads_with_no_valid_bases_agg, # Add to return dict
