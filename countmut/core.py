@@ -22,6 +22,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import pysam
+from rich.console import Console
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -944,17 +945,20 @@ def count_mutations(
                 initializer=_init_worker,
                 initargs=(samfile, reffile, temp_dir),
             ) as executor:
+                # Initialize rich console once for consistent output
+                console = Console()
+
                 # Use a simple Progress bar for warmup phase
                 with Progress(
-                    SpinnerColumn(), # Added spinner
+                    SpinnerColumn(),
                     "[progress.description]{task.description}",
-                    "[cyan]{task.completed}/{task.total} workers warmed up",  # Updated format
+                    "[cyan]{task.completed}/{task.total} workers warmed up",
                     TimeElapsedColumn(),
                     expand=False,
+                    console=console, # Added console for transient behavior
+                    transient=True, # Added transient=True to hide the bar after completion
                 ) as warmup_progress:
-                    warmup_task = warmup_progress.add_task(
-                        "🚀 Warming up workers...", total=threads
-                    )  # Simplified description
+                    warmup_task = warmup_progress.add_task("🚀 Warming up workers...", total=threads)
 
                     warmup_futures = [
                         executor.submit(_warmup_worker) for _ in range(threads)
