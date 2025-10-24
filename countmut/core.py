@@ -971,7 +971,7 @@ def count_mutations(
 
                 # Use a Live context to keep the progress bar at the bottom
                 with Progress(
-                    SpinnerColumn(), # Added spinner
+                    SpinnerColumn(),
                     "[progress.description]{task.description}",
                     "[progress.percentage]{task.percentage:>3.0f}%",
                     "[cyan]{task.completed}/{task.total} regions",
@@ -980,9 +980,11 @@ def count_mutations(
                     TimeElapsedColumn(),
                     TimeRemainingColumn(),
                     expand=False,
+                    console=console, # Ensure console is passed for transient behavior
+                    transient=True, # Make the main progress bar transient
                 ) as progress:
                     task = progress.add_task(
-                        "Processing regions...",
+                        "🔄 Processing regions...",
                         total=len(worker_args),
                         counts=0,
                         reads=0,
@@ -1013,18 +1015,12 @@ def count_mutations(
                             )
 
                             # Accumulate detailed skipped read counts
-                            total_skipped_wrong_strand_agg += result.get(
-                                "skipped_wrong_strand", 0
-                            )
+                            total_skipped_wrong_strand_agg += result.get("skipped_wrong_strand", 0)
                             total_skipped_unmapped_dup_secondary_agg += result.get(
                                 "skipped_unmapped_dup_secondary", 0
                             )
-                            total_skipped_missing_tags_agg += result.get(
-                                "skipped_missing_tags", 0
-                            )
-                            total_skipped_no_sequence_agg += result.get(
-                                "skipped_no_sequence", 0
-                            )
+                            total_skipped_missing_tags_agg += result.get("skipped_missing_tags", 0)
+                            total_skipped_no_sequence_agg += result.get("skipped_no_sequence", 0)
 
                             if result.get("timings"):
                                 all_timings.append(result["timings"])
@@ -1053,13 +1049,6 @@ def count_mutations(
 
                     # Explicitly shut down the executor after all results are collected
                     executor.shutdown(wait=True)
-
-                # Log the final progress bar state using directly accessible variables
-                logger.info(
-                    f"📊 Processed {total_processed}/{len(worker_args)} regions "
-                    f"{total_counts:,} mutations {total_reads_processed_all_workers:,} reads "
-                    f"Finished in {time.time() - start_time:.2f}s"
-                )
 
             # Write results to file if specified
             if output_file:
