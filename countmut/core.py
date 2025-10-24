@@ -299,18 +299,37 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         for read in reads_to_process:
             total_reads += 1
             try:
+                actual_strand = determine_actual_strand(read)
+
                 # If tagging is enabled, count alternative mutations and update tags
                 if ref_base2 and mut_base2:
-                    alt_ref_count = (
-                        read.query_sequence.upper().count(ref_base2)
-                        if read.query_sequence
-                        else 0
-                    )
-                    alt_mut_count = (
-                        read.query_sequence.upper().count(mut_base2)
-                        if read.query_sequence
-                        else 0
-                    )
+                    alt_ref_count = 0
+                    alt_mut_count = 0
+                    if read.query_sequence:
+                        for query_pos, ref_pos in read.get_aligned_pairs(
+                            matches_only=True
+                        ):
+                            if not (region_start <= ref_pos < region_end):
+                                continue
+
+                            ref_base_at_pos = target_seq[ref_pos - region_start].upper()
+                            query_base_at_pos = read.query_sequence[query_pos].upper()
+
+                            if actual_strand == "+":
+                                if ref_base_at_pos == ref_base2:
+                                    if query_base_at_pos == ref_base2:
+                                        alt_ref_count += 1
+                                    elif query_base_at_pos == mut_base2:
+                                        alt_mut_count += 1
+                            else:  # Reverse strand
+                                if ref_base_at_pos == reverse_complement(ref_base2):
+                                    query_base_revcomp = reverse_complement(
+                                        query_base_at_pos
+                                    )
+                                    if query_base_revcomp == ref_base2:
+                                        alt_ref_count += 1
+                                    elif query_base_revcomp == mut_base2:
+                                        alt_mut_count += 1
 
                     read.set_tag("Zc", alt_ref_count, "i")
                     read.set_tag("Yc", alt_mut_count, "i")
@@ -318,9 +337,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     if read.has_tag("NS"):
                         ns_val = read.get_tag("NS")
                         read.set_tag("NS", max(0, ns_val - alt_mut_count), "i")
-
-                # Determine which strand to process based on read orientation
-                actual_strand = determine_actual_strand(read)
 
                 # Skip if we don't want to process this strand
                 if process_forward_only and actual_strand != "+":
