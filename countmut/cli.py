@@ -50,11 +50,11 @@ click.rich_click.OPTION_GROUPS = {
         {
             "name": "Quality Filters",
             "options": [
+                "--trim-start",
+                "--trim-end",
                 "--min-baseq",
                 "--min-mapq",
                 "--max-sub",
-                "--trim-start",
-                "--trim-end",
                 "--max-unc",
                 "--min-con",
             ],
@@ -233,49 +233,54 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     type=int,
     default=2,
     show_default=True,
-    help="[bold]Trim N bases[/bold] from read 5' end (fragment orientation)",
+    help="[dim](base-level)[/dim] [bold]Trim N bases[/bold] from read 5' end (fragment orientation)",
 )
 @click.option(
     "--trim-end",
     type=int,
     default=2,
     show_default=True,
-    help="[bold]Trim N bases[/bold] from read 3' end (fragment orientation)",
+    help="[dim](base-level)[/dim] [bold]Trim N bases[/bold] from read 3' end (fragment orientation)",
 )
 @click.option(
     "--max-unc",
     type=int,
     default=3,
     show_default=True,
-    help="[bold]Max unconverted threshold[/bold] (Zf) to consider converted",
+    help="[dim](read-level)[/dim] [bold]Max unconverted threshold[/bold] (Zf) to consider converted",
 )
 @click.option(
     "--min-con",
     type=int,
     default=1,
     show_default=True,
-    help="[bold]Min converted threshold[/bold] (Yf) to consider converted",
+    help="[dim](read-level)[/dim] [bold]Min converted threshold[/bold] (Yf) to consider converted",
 )
 @click.option(
     "--max-sub",
     type=int,
     default=1,
     show_default=True,
-    help="[bold]Max substitutions[/bold] (NS) for high-quality alignment",
-)
-@click.option(
-    "--min-baseq",
-    type=int,
-    default=20,
-    show_default=True,
-    help="[bold]Min base quality[/bold] (Phred score) to count bases",
+    help="[dim](read-level)[/dim] [bold]Max substitutions[/bold] (NS) for high-quality alignment",
 )
 @click.option(
     "--min-mapq",
     type=int,
     default=0,
     show_default=True,
-    help="[bold]Min mapping quality[/bold] (MAPQ) to count reads",
+    help="[dim](read-level)[/dim] [bold]Min mapping quality[/bold] (MAPQ) to count reads",
+)
+@click.option(
+    "--min-baseq",
+    type=int,
+    default=20,
+    show_default=True,
+    help="[dim](base-level)[/dim] [bold]Min base quality[/bold] (Phred score) to count bases",
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Enable verbose logging output.",
 )
 @click.version_option(
     importlib_metadata.version("countmut"),
@@ -307,6 +312,7 @@ def main(
     max_sub: int,
     min_baseq: int,
     min_mapq: int,
+    verbose: bool,
 ):
     """
     [bold blue]🧬 CountMut - Ultra-fast Strand-aware Mutation Counter[/bold blue]
@@ -417,6 +423,7 @@ def main(
     info_table.add_row("Max substitutions (NS):", str(max_sub))
     info_table.add_row("Min base quality (Q):", str(min_baseq))
     info_table.add_row("Min mapping quality (MAPQ):", str(min_mapq))
+    info_table.add_row("Verbose logging:", "Yes" if verbose else "No")
 
     console.print(
         Panel(
@@ -461,6 +468,7 @@ def main(
             max_sub=max_sub,
             min_baseq=min_baseq,
             min_mapq=min_mapq,
+            verbose=verbose,  # Pass verbose flag
         )
 
         if success:

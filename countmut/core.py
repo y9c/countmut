@@ -14,6 +14,7 @@ import glob
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -673,6 +674,7 @@ def count_mutations(
     max_sub: int = 1,
     min_baseq: int = 20,
     min_mapq: int = 0,
+    verbose: bool = False,  # New parameter
 ) -> bool:
     """
     Count mutations from BAM pileup data with parallel processing.
@@ -706,6 +708,12 @@ def count_mutations(
     """
     start_time = time.time()
 
+    # Configure logging level based on verbose flag
+    if verbose:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)
+
     # Convert bases to uppercase once at the beginning
     ref_base = ref_base.upper()
     mut_base = mut_base.upper()
@@ -719,38 +727,38 @@ def count_mutations(
     try:
         with tempfile.TemporaryDirectory(prefix="countmut_") as temp_dir:
             if tagging_enabled:
-                print(
+                logger.info(
                     f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
                 )
 
             # Validate input files exist
             if not os.path.exists(samfile):
-                print(f"❌ Input BAM file '{samfile}' does not exist!")
+                logger.error(f"❌ Input BAM file '{samfile}' does not exist!")
                 return False
             if not os.path.exists(reffile):
-                print(f"❌ Reference file '{reffile}' does not exist!")
+                logger.error(f"❌ Reference file '{reffile}' does not exist!")
                 return False
 
             # Check and create BAM index if needed
             bam_index = samfile + ".bai"
             if not os.path.exists(bam_index):
-                print(f"📇 BAM index not found. Creating index: {bam_index}")
+                logger.info(f"📇 BAM index not found. Creating index: {bam_index}")
                 try:
                     pysam.index(samfile)
-                    print("✅ BAM index created successfully")
+                    logger.info("✅ BAM index created successfully")
                 except Exception as e:
-                    print(f"❌ Failed to create BAM index: {e}")
+                    logger.error(f"❌ Failed to create BAM index: {e}")
                     return False
 
             # Check and create FASTA index if needed
             fasta_index = reffile + ".fai"
             if not os.path.exists(fasta_index):
-                print(f"📇 FASTA index not found. Creating index: {fasta_index}")
+                logger.info(f"📇 FASTA index not found. Creating index: {fasta_index}")
                 try:
                     pysam.faidx(reffile)
-                    print("✅ FASTA index created successfully")
+                    logger.info("✅ FASTA index created successfully")
                 except Exception as e:
-                    print(f"❌ Failed to create FASTA index: {e}")
+                    logger.error(f"❌ Failed to create FASTA index: {e}")
                     return False
 
             # Set default threads
@@ -760,17 +768,17 @@ def count_mutations(
             # Validate base parameters
             valid_bases = {"A", "T", "G", "C"}
             if ref_base not in valid_bases:
-                print(
+                logger.error(
                     f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
                 )
                 return False
             if mut_base not in valid_bases:
-                print(
+                logger.error(
                     f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
                 )
                 return False
 
-            print("📖 Creating genomic bins...")
+            logger.info("📖 Creating genomic bins...")
 
             # Read FASTA index file directly (much faster than opening full FASTA)
             ref_chrom_lengths = read_fasta_index(reffile)
@@ -780,7 +788,7 @@ def count_mutations(
             bam_chroms = list(samfile_open.references)
             samfile_open.close()
 
-            print(
+            logger.info(
                 f"🔍 Filtering chromosomes: {len(bam_chroms)} in BAM, {len(ref_chrom_lengths)} in reference"
             )
 
@@ -793,13 +801,15 @@ def count_mutations(
                     start, end = map(int, pos_range.split("-"))
                     # Check if chromosome exists in BAM
                     if chrom not in bam_chroms:
-                        print(f"❌ Chromosome '{chrom}' not found in BAM file!")
-                        print(f"Available chromosomes: {', '.join(sorted(bam_chroms))}")
+                        logger.error(f"❌ Chromosome '{chrom}' not found in BAM file!")
+                        logger.error(
+                            f"Available chromosomes: {', '.join(sorted(bam_chroms))}"
+                        )
                         return False
                     # Convert from 1-based to 0-based coordinates for pysam
                     bin_list = [(chrom, start - 1, end)]
                 else:
-                    print(
+                    logger.error(
                         f"❌ Invalid region format: {region}. Use 'chr1:1000000-2000000'"
                     )
                     return False
@@ -820,19 +830,19 @@ def count_mutations(
                         bin_start += bin_size
 
                 if missing_in_ref:
-                    print(
+                    logger.warning(
                         f"⚠️  {len(missing_in_ref)} BAM chromosomes not found in reference"
                     )
                     if len(missing_in_ref) <= 10:
-                        print(f"   Missing: {', '.join(missing_in_ref)}")
+                        logger.warning(f"   Missing: {', '.join(missing_in_ref)}")
                     else:
-                        print(
+                        logger.warning(
                             f"   Missing: {', '.join(missing_in_ref[:10])} ... and {len(missing_in_ref) - 10} more"
                         )
 
-                print(f"✅ Processing {len(valid_chroms)} valid chromosomes")
+                logger.info(f"✅ Processing {len(valid_chroms)} valid chromosomes")
 
-            print(
+            logger.info(
                 f"✅ Created {len(bin_list)} bins across {len({b[0] for b in bin_list})} chromosomes"
             )
 
@@ -844,16 +854,16 @@ def count_mutations(
             if not any(
                 [process_both_strands, process_forward_only, process_reverse_only]
             ):
-                print(
+                logger.error(
                     f"❌ Invalid strand option '{strand}'. Must be 'both', 'forward', or 'reverse'"
                 )
                 return False
 
             # Use all regions for now (pre-filtering can be added later)
-            print("🔍 Using all regions for processing...")
+            logger.info("🔍 Using all regions for processing...")
             total_skipped = 0
             filtered_bin_list = bin_list
-            print(f"✅ Processing {len(filtered_bin_list)} regions")
+            logger.info(f"✅ Processing {len(filtered_bin_list)} regions")
 
             # Prepare worker arguments - now process both strands in one worker
             worker_args = []
@@ -894,14 +904,15 @@ def count_mutations(
             # Write header immediately if outputting to stdout
             if output_file is None:
                 headers = get_output_headers(save_rest)
-                print("\t".join(headers))
-                # Flush to ensure immediate output
-                import sys
-
+                sys.stdout.write(
+                    "\t".join(headers) + "\n"
+                )  # Use sys.stdout.write for raw output
                 sys.stdout.flush()
 
-            print(f"🚀 Processing {len(worker_args)} regions with {threads} threads...")
-            print(
+            logger.info(
+                f"🚀 Processing {len(worker_args)} regions with {threads} threads..."
+            )
+            logger.info(
                 f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})"
             )
 
@@ -913,13 +924,13 @@ def count_mutations(
                 initargs=(samfile, reffile, temp_dir),
             ) as executor:
                 # Submit warmup tasks to initialize workers
-                print("🚀 Warming up worker processes...")
+                logger.info("🚀 Warming up worker processes...")
                 warmup_futures = [
                     executor.submit(_warmup_worker) for _ in range(threads)
                 ]
                 for future in as_completed(warmup_futures):
                     future.result()  # Wait for each worker to initialize
-                print("✅ Workers warmed up. Submitting main tasks...")
+                logger.info("✅ Workers warmed up. Submitting main tasks...")
 
                 with Progress(
                     "[progress.description]{task.description}",
@@ -963,7 +974,9 @@ def count_mutations(
                             # Stream results immediately if outputting to stdout
                             if output_file is None and result["counts"]:
                                 for row in result["counts"]:
-                                    print("\t".join(map(str, row)))
+                                    sys.stdout.write(
+                                        "\t".join(map(str, row)) + "\n"
+                                    )  # Use sys.stdout.write for raw output
                                     sys.stdout.flush()
                             else:
                                 # Collect for file output
@@ -987,7 +1000,7 @@ def count_mutations(
 
             # Write results to file if specified
             if output_file:
-                print("📝 Writing results to file...")
+                logger.info("📝 Writing results to file...")
                 # Sort results by chromosome and position
                 all_results.sort(key=lambda x: (x[0], x[1]))
                 write_output(all_results, output_file, save_rest)
@@ -999,16 +1012,16 @@ def count_mutations(
 
             # Print summary
             elapsed_time = time.time() - start_time
-            print("✅ Processing completed!")
-            print(f"   Regions processed: {total_processed}")
-            print(f"   Regions skipped (no reads): {total_skipped}")
-            print(f"   Total mutations found: {total_counts}")
-            print(f"   Time elapsed: {elapsed_time:.2f}s")
-            print(
+            logger.info("✅ Processing completed!")
+            logger.info(f"   Regions processed: {total_processed}")
+            logger.info(f"   Regions skipped (no reads): {total_skipped}")
+            logger.info(f"   Total mutations found: {total_counts}")
+            logger.info(f"   Time elapsed: {elapsed_time:.2f}s")
+            logger.info(
                 f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec"
             )
             if total_skipped > 0:
-                print(
+                logger.info(
                     f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!"
                 )
             if all_timings:
@@ -1016,13 +1029,13 @@ def count_mutations(
                 total_time = sum(t.get("total", 0) for t in all_timings)
                 n = len(all_timings)
                 avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
-                print(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
+                logger.info(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
 
             return True
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
-        print(f"❌ Processing failed: {e}")
+        logger.error(f"❌ Processing failed: {e}")
         return False
     finally:
         # Readers are shared per process and closed by initializer cleanup
@@ -1040,7 +1053,7 @@ def _final_bam_processing(
     Handles merging, sorting, and indexing of temporary BAM files.
     """
     if tagging_enabled:
-        print(f"Merging {len(os.listdir(temp_dir))} temporary BAM files...")
+        logger.info(f"Merging {len(os.listdir(temp_dir))} temporary BAM files...")
 
         final_tagged_bam = (
             output_bam or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
@@ -1055,26 +1068,26 @@ def _final_bam_processing(
                 *glob.glob(os.path.join(temp_dir, "shard_*.bam")),
             )
 
-            print("Sorting and indexing final BAM...")
+            logger.info("Sorting and indexing final BAM...")
             sorted_bam_path = final_tagged_bam + ".sorted"
             pysam.sort("-@", str(threads), "-o", sorted_bam_path, final_tagged_bam)
             os.replace(sorted_bam_path, final_tagged_bam)
             pysam.index(final_tagged_bam)
 
-            print(f"✅ Final tagged BAM created: {final_tagged_bam}")
+            logger.info(f"✅ Final tagged BAM created: {final_tagged_bam}")
 
             if not output_bam:
                 _temp_files_to_clean.add(final_tagged_bam)
                 _temp_files_to_clean.add(final_tagged_bam + ".bai")
 
         except Exception as e:
-            print(f"❌ Failed during BAM processing: {e}")
+            logger.error(f"❌ Failed during BAM processing: {e}")
         finally:
             # Clean up the shard directory as it's no longer needed
             try:
                 if os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
             except Exception as e:
-                print(
+                logger.warning(
                     f"⚠️  Warning: Could not remove temporary directory {temp_dir}: {e}"
                 )
