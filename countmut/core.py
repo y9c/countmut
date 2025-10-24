@@ -69,7 +69,7 @@ _WORKER_WRITER = None
 _WORKER_ID = None
 
 # Special value to identify shutdown tasks
-_SHUTDOWN_SENTINEL = "__SHUTDOWN__"
+# _SHUTDOWN_SENTINEL = "__SHUTDOWN__"
 
 
 def _worker_shutdown_task():
@@ -194,7 +194,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         overall_start = time.time()
         # Unpack arguments
         (
-            samfile_path,
             region_chrom,
             region_start,
             region_end,
@@ -203,7 +202,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             mut_base,
             ref_base2,
             mut_base2,
-            temp_bam_path,
             save_rest,
             pad,
             trim_start,
@@ -213,7 +211,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             max_sub,
             min_baseq,
             min_mapq,
-            # worker_id is now a global, removed from args unpacking
         ) = args
 
         # Get worker-specific BAM writer
@@ -620,9 +617,12 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Error in worker {worker_id}: {e}")
+        # Ensure worker_id is always available for logging
+        worker_id_for_log = _WORKER_ID if _WORKER_ID is not None else "unknown"
+        logger.error(f"Error in worker {worker_id_for_log}: {e}")
+        logger.error(f"❌ Processing failed: {e}")
         return {
-            "worker_id": worker_id,
+            "worker_id": worker_id_for_log,
             "region": f"{region_chrom}:{region_start}-{region_end}:{strand_option}",
             "counts": [],
             "success": False,
@@ -873,7 +873,6 @@ def count_mutations(
             for i, (chrom, bin_start, bin_end) in enumerate(filtered_bin_list):
                 worker_args.append(
                     (
-                        samfile,
                         chrom,
                         bin_start,
                         bin_end,
@@ -882,7 +881,6 @@ def count_mutations(
                         mut_base,
                         ref_base2,
                         mut_base2,
-                        # temp_bam_path is now handled by _init_worker
                         save_rest,
                         pad,
                         trim_start,
@@ -892,7 +890,6 @@ def count_mutations(
                         max_sub,
                         min_baseq,
                         min_mapq,
-                        i,
                     )
                 )
 
