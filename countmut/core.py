@@ -12,6 +12,7 @@ Date: 2025-10-23
 import atexit
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections import Counter
@@ -330,8 +331,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                     elif query_base_revcomp == mut_base2:
                                         alt_mut_count += 1
 
-                    read.set_tag("Zc", alt_ref_count, "i")
                     read.set_tag("Yc", alt_mut_count, "i")
+                    read.set_tag("Zc", alt_ref_count, "i")
 
                     if read.has_tag("NS"):
                         ns_val = read.get_tag("NS")
@@ -928,34 +929,14 @@ def count_mutations(
                 write_output(all_results, output_file, save_rest)
 
             # Merge, sort, and index temporary BAM files if tagging was enabled
-            if tagging_enabled and worker_temp_bams:
-                print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
-
-                final_tagged_bam = (
-                    output_bam
-                    or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
-                )
-
-                try:
-                    # Use pysam cat for robust merging
-                    pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
-
-                    print("Sorting and indexing final BAM...")
-                    sorted_bam_path = final_tagged_bam + ".sorted"
-                    pysam.sort(
-                        "-@", str(threads), "-o", sorted_bam_path, final_tagged_bam
-                    )
-                    os.replace(sorted_bam_path, final_tagged_bam)
-                    pysam.index(final_tagged_bam)
-
-                    if not output_bam:
-                        _temp_files_to_clean.add(final_tagged_bam)
-                        _temp_files_to_clean.add(final_tagged_bam + ".bai")
-
-                    print(f"✅ Final tagged BAM created: {final_tagged_bam}")
-
-                except Exception as e:
-                    print(f"❌ Failed during BAM processing: {e}")
+            _final_bam_processing(
+                tagging_enabled,
+                worker_temp_bams,
+                output_bam,
+                threads,
+                temp_dir,
+                samfile,
+            )
 
             # Print summary
             elapsed_time = time.time() - start_time
@@ -978,11 +959,59 @@ def count_mutations(
                 avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
                 print(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
 
-        return True
+            return True
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
         print(f"❌ Processing failed: {e}")
         return False
     finally:
-        cleanup_temp_files()
+        # Readers are shared per process and closed by initializer cleanup
+        pass
+
+
+def _final_bam_processing(
+    tagging_enabled: bool,
+    worker_temp_bams: list[str],
+    output_bam: str | None,
+    threads: int,
+    temp_dir: str,
+    samfile: str,
+) -> None:
+    """
+    Handles merging, sorting, and indexing of temporary BAM files.
+    """
+    if tagging_enabled and worker_temp_bams:
+        print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
+
+        final_tagged_bam = (
+            output_bam or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
+        )
+
+        try:
+            # Use pysam cat for robust merging
+            pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
+
+            print("Sorting and indexing final BAM...")
+            sorted_bam_path = final_tagged_bam + ".sorted"
+            pysam.sort("-@", str(threads), "-o", sorted_bam_path, final_tagged_bam)
+            os.replace(sorted_bam_path, final_tagged_bam)
+            pysam.index(final_tagged_bam)
+
+            print(f"✅ Final tagged BAM created: {final_tagged_bam}")
+
+            if not output_bam:
+                _temp_files_to_clean.add(final_tagged_bam)
+                _temp_files_to_clean.add(final_tagged_bam + ".bai")
+
+        except Exception as e:
+            print(f"❌ Failed during BAM processing: {e}")
+        finally:
+            # Clean up the shard directory as it's no longer needed
+            try:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(
+                    f"⚠️  Warning: Could not remove temporary directory {temp_dir}: {e}"
+                )
