@@ -719,7 +719,7 @@ atexit.register(cleanup_temp_files)
 
 def count_mutations(
     samfile: str,
-    reffile: str,
+    reference: str,
     output_file: str | None = None,
     output_bam: str | None = None,
     ref_base: str = "A",
@@ -730,7 +730,7 @@ def count_mutations(
     threads: int | None = None,
     save_rest: bool = False,
     region: str | None = None,
-    force: bool = False,  # Re-added force parameter
+    force: bool = False,
     strand: str = "both",
     pad: int = 15,
     trim_start: int = 2,
@@ -740,8 +740,8 @@ def count_mutations(
     max_sub: int = 1,
     min_baseq: int = 20,
     min_mapq: int = 0,
-    verbose: bool = False,  # New parameter
-) -> bool:
+    verbose: bool = False,
+) -> dict:
     """
     Count mutations from BAM pileup data with parallel processing.
 
@@ -754,7 +754,7 @@ def count_mutations(
 
     Args:
         samfile: Path to input BAM file
-        reffile: Path to reference FASTA file
+        reference: Path to reference FASTA file
         output_file: Path to output TSV file (if None, prints to stdout)
         ref_base: Reference base to count (default: 'A')
         mut_base: Mutation base to count (default: 'G')
@@ -804,11 +804,11 @@ def count_mutations(
                 return False
 
         # Check and create FASTA index if needed
-        fasta_index = reffile + ".fai"
+        fasta_index = reference + ".fai"
         if not os.path.exists(fasta_index):
             logger.info(f"📇 FASTA index not found. Creating index: {fasta_index}")
             try:
-                pysam.faidx(reffile)
+                pysam.faidx(reference)
                 logger.info("✅ FASTA index created successfully")
             except Exception as e:
                 logger.error(f"❌ Failed to create FASTA index: {e}")
@@ -836,8 +836,8 @@ def count_mutations(
         if not os.path.exists(samfile):
             logger.error(f"❌ Input BAM file '{samfile}' does not exist!")
             return False
-        if not os.path.exists(reffile):
-            logger.error(f"❌ Reference file '{reffile}' does not exist!")
+        if not os.path.exists(reference):
+            logger.error(f"❌ Reference file '{reference}' does not exist!")
             return False
         logger.info("✅ BAM file validation passed")
 
@@ -852,7 +852,7 @@ def count_mutations(
             logger.info("📖 Creating genomic bins...")
 
             # Read FASTA index file directly (much faster than opening full FASTA)
-            ref_chrom_lengths = read_fasta_index(reffile)
+            ref_chrom_lengths = read_fasta_index(reference)
 
             # Get BAM header
             samfile_open = pysam.AlignmentFile(samfile, "rb")
@@ -1008,7 +1008,7 @@ def count_mutations(
             with ProcessPoolExecutor(
                 max_workers=threads,
                 initializer=_init_worker,
-                initargs=(samfile, reffile, temp_dir),
+                initargs=(samfile, reference, temp_dir),
             ) as executor:
                 # Initialize rich console once for consistent output
                 console = Console()

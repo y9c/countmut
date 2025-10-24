@@ -1,17 +1,10 @@
 """
-CountMut - Fast, parallel mutation counting from BAM pileup data
+CountMut: Ultra-fast strand-aware mutation counter.
 
-This package provides efficient mutation counting functionality with:
-- Parallel processing using genomic windows
-- Bisulfite conversion analysis
-- Rich logging and progress tracking
-- Modern CLI interface
-
-Author: Ye Chang
-Date: 2025-10-23
+This package provides a command-line tool and a library for counting mutations
+from BAM pileup data, with a focus on bisulfite sequencing analysis.
 """
 
-from .cli import main
 from .core import count_mutations
 from .utils import format_duration, get_output_headers, write_output
 
@@ -22,6 +15,5 @@ __all__ = [
     "count_mutations",
     "format_duration",
     "get_output_headers",
-    "main",
     "write_output",
 ]

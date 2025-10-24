@@ -36,6 +36,7 @@ class TestCLI:
         """Test CLI with missing required arguments."""
         result = self.runner.invoke(main, [])
         assert result.exit_code != 0
+        assert "Usage:" in result.output
 
     def test_cli_invalid_files(self):
         """Test CLI with invalid input files."""
@@ -44,7 +45,7 @@ class TestCLI:
             [
                 "-i",
                 "nonexistent.bam",
-                "-r",
+                "--reference",
                 "nonexistent.fa",
             ],
         )
@@ -82,7 +83,7 @@ class TestCLI:
                 [
                     "-i",
                     "/home/yec/Desktop/test_rRNA.bam",
-                    "-r",
+                    "--reference",
                     "/home/yec/Desktop/genes.fa",
                     "-o",
                     str(output_file),
@@ -116,7 +117,7 @@ class TestCLI:
                 [
                     "-i",
                     "/home/yec/Desktop/test_rRNA.bam",
-                    "-r",
+                    "--reference",
                     "/home/yec/Desktop/genes.fa",
                     "-o",
                     str(output_file),
@@ -157,7 +158,7 @@ class TestCLI:
                 [
                     "-i",
                     "/home/yec/Desktop/test_rRNA.bam",
-                    "-r",
+                    "--reference",
                     "/home/yec/Desktop/genes.fa",
                     "-o",
                     str(output_file),

@@ -102,8 +102,24 @@ TSV file with the following columns:
 
 **Count categories** (x0, x1, x2):
 - **x0 (low quality)**: Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
-- **x1 (high conversion)**: Bases from reads with high conversion efficiency (low Zf and high Yf)
-- **x2 (insufficient conversion)**: Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
+- **x1 (insufficient conversion)**: Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
+- **x2 (high conversion)**: Bases from reads with high conversion efficiency (low Zf and high Yf)
+
+### Example Output
+
+Without `--save-rest`:
+
+| `chrom` | `pos` | `strand` | `motif` | `u0` | `u1` | `u2` | `m0` | `m1` | `m2` |
+|---------|--------|----------|---------|------|------|------|------|------|------|
+| `chr1`  | `10000` | `+`      | `AAG`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  |
+| `chr1`  | `10001` | `-`      | `TTC`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  |
+
+With `--save-rest`:
+
+| `chrom` | `pos` | `strand` | `motif` | `u0` | `u1` | `u2` | `m0` | `m1` | `m2` | `o0` | `o1` | `o2` |
+|---------|--------|----------|---------|------|------|------|------|------|------|------|------|------|
+| `chr1`  | `10000` | `+`      | `AAG`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  | `1`  | `2`  | `3`  |
+| `chr1`  | `10001` | `-`      | `TTC`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  | `1`  | `2`  | `3`  |
 
 
 &nbsp;

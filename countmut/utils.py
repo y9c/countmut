@@ -35,31 +35,23 @@ def format_duration(sec: float) -> str:
 
 
 def get_output_headers(save_rest: bool = False) -> list[str]:
-    """
-    Get the appropriate output headers based on save_rest parameter.
+    """Return the output column headers based on whether to include 'other' counts.
 
-    Args:
-        save_rest: Whether to include additional statistics columns
-    Returns:
-        List of column headers
-        - u0, u1, u2: unconverted (reference base) counts
-        - m0, m1, m2: mutation (mutation base only) counts
-        - o0, o1, o2: other bases counts (only with save_rest)
+    The column headers are defined as follows:
+    - u: unconverted (reference base)
+    - m: mutation (mutation base only)
+    - o: other bases (only with save_rest)
+
+    Count categories (x0, x1, x2):
+    - x0 (low quality): Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
+    - x1 (insufficient conversion): Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
+    - x2 (high conversion): Bases from reads with high conversion efficiency (low Zf and high Yf)
     """
-    headers = [
-        "chrom",
-        "pos",
-        "strand",
-        "motif",
-        "u0",
-        "u1",
-        "u2",
-        "m0",
-        "m1",
-        "m2",
-    ]
+    headers = ["chrom", "pos", "strand", "motif"]
+    base_cols = ["u0", "u1", "u2", "m0", "m1", "m2"]
     if save_rest:
-        headers.extend(["o0", "o1", "o2"])
+        base_cols += ["o0", "o1", "o2"]
+    headers.extend(base_cols)
     return headers
 
 

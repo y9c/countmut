@@ -13,13 +13,15 @@ Date: 2025-10-23
 import os
 from importlib import metadata as importlib_metadata
 
-import rich.box  # Corrected import
+import rich.box
 import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from .core import count_mutations
+
+__version__ = importlib_metadata.version("countmut")
 
 # Configure rich-click
 click.rich_click.TEXT_MARKUP = "rich"
@@ -32,74 +34,59 @@ click.rich_click.ERRORS_SUGGESTION = (
 click.rich_click.ERRORS_EPILOGUE = "To find out more, visit [link=https://github.com/y9c/countmut]https://github.com/y9c/countmut[/link]"
 click.rich_click.TEXT_EMOJIS = True
 
-# Configure option groups for better organization
-click.rich_click.OPTION_GROUPS = {
-    "countmut": [
+# Define option groups for better CLI help formatting
+OPTION_GROUPS = {
+    "countmut.cli": [
         {
             "name": "Input/Output Options",
-            "options": ["--input", "--reference", "--output", "--force"],
-        },
-        {
-            "name": "Mutation Analysis",
-            "options": ["--ref-base", "--mut-base", "--strand", "--region"],
-        },
-        {
-            "name": "Quality Filters",
             "options": [
-                "--trim-start",
-                "--trim-end",
-                "--min-baseq",
-                "--min-mapq",
-                "--max-sub",
-                "--max-unc",
-                "--min-con",
+                "--input",
+                "--reference",
+                "--output",
+                "--output-bam",
+                "--force",
             ],
         },
         {
-            "name": "Output Records",
-            "options": ["--pad", "--save-rest"],
+            "name": "Mutation Options",
+            "options": ["--ref-base", "--mut-base", "--ref-base2", "--mut-base2"],
         },
         {
-            "name": "Performance Options",
-            "options": ["--threads", "--bin-size"],
+            "name": "Tuning Options",
+            "options": [
+                "--bin-size",
+                "--threads",
+                "--save-rest",
+                "--region",
+                "--strand",
+                "--pad",
+            ],
         },
         {
-            "name": "Alternative Mutation Tagging",
-            "options": ["--ref-base2", "--mut-base2", "--output-bam"],
+            "name": "Filtering Options",
+            "options": [
+                "--trim-start",
+                "--trim-end",
+                "--max-unc",
+                "--min-con",
+                "--max-sub",
+                "--min-baseq",
+                "--min-mapq",
+            ],
         },
-        {
-            "name": "Help & Version",
-            "options": ["--help", "--version"],
-        },
-    ],
+        {"name": "Miscellaneous Options", "options": ["--verbose", "--help", "--version"]},
+    ]
 }
 
 console = Console()
 
 
 @click.command(
-    name="countmut",
-    no_args_is_help=True,
+    cls=click.RichCommand,
     context_settings={"help_option_names": ["-h", "--help"]},
-    epilog="""
-Examples:
-
-# Basic usage
-countmut -i input.bam -r reference.fa
-
-# Save to file with custom parameters
-countmut -i input.bam -r reference.fa -o mutations.tsv --ref-base T --mut-base C
-
-# Use more threads and smaller bins
-countmut -i input.bam -r reference.fa -t 16 -b 5000
-
-# Save additional statistics
-countmut -i input.bam -r reference.fa -s
-
-# Process specific region
-countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
-    """,
+    no_args_is_help=True,
 )
+@click.version_option(__version__, "-v", "--version", prog_name="countmut")
 @click.option(
     "-i",
     "--input",
@@ -111,7 +98,7 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
 @click.option(
     "-r",
     "--reference",
-    "reffile",  # Parameter name for main function
+    "reference",  # Parameter name for main function
     type=click.Path(exists=True, path_type=str),
     required=True,
     help="Reference FASTA file",
@@ -249,26 +236,20 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
 @click.option(
     "--verbose",
     is_flag=True,
+    default=False,
     help="Enable verbose logging output.",
 )
-@click.version_option(
-    importlib_metadata.version("countmut"),
-    "--version",
-    "-v",
-    prog_name="countmut",
-    message="%(prog)s %(version)s",
-)
 def main(
-    samfile: str,  # Maps to --input
-    reffile: str,  # Maps to --reference
-    output_file: str | None,  # Maps to --output
+    samfile: str,
+    reference: str,
+    output_file: str | None,
     output_bam: str | None,
     ref_base: str,
     mut_base: str,
     ref_base2: str | None,
     mut_base2: str | None,
     bin_size: int,
-    threads: int | None,
+    threads: int,
     save_rest: bool,
     region: str | None,
     force: bool,
@@ -284,11 +265,18 @@ def main(
     verbose: bool,
 ):
     """
-    CountMut: Ultra-fast strand-aware mutation counter.
+    \b
+    ## 🚀 Ultra-fast strand-aware mutation counter
+
+    `countmut` is a high-performance tool for counting specific mutations
+    (e.g., A>G) from BAM files, designed for bisulfite sequencing analysis
+    with quality-based overlap deduplication.
     """
-    # Convert paths to absolute paths immediately for consistency
+    console = Console()
+
+    # Get absolute paths for better logging and error messages
     input_bam_abs = os.path.abspath(samfile)
-    reference_fasta_abs = os.path.abspath(reffile)
+    reference_fasta_abs = os.path.abspath(reference)
     output_file_abs = os.path.abspath(output_file) if output_file else None
     output_bam_abs = os.path.abspath(output_bam) if output_bam else None
 
@@ -356,8 +344,8 @@ def main(
         console.print(config_panel)
 
         stats = count_mutations(
-            samfile=input_bam_abs,  # Added samfile keyword argument
-            reffile=reference_fasta_abs,  # Added reffile keyword argument
+            samfile=input_bam_abs,
+            reference=reference_fasta_abs,
             output_file=output_file_abs,
             output_bam=output_bam_abs,
             ref_base=ref_base,

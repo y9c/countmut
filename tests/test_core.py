@@ -170,7 +170,7 @@ class TestIntegration:
         # Run mutation counting with default parameters
         stats = count_mutations(
             samfile=str(input_bam),
-            reffile=str(reference_fasta),
+            reference=str(reference_fasta),
             output_file=str(output_tsv),
             output_bam=None,
             ref_base="A",
