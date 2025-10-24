@@ -553,12 +553,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 f"📊 Region {region_chrom}:{region_start}-{region_end}:{strand_option} - "
                 f"Total: {total_reads}, Processed: {processed_reads}, Skipped: {total_skipped_reads}"
             )
-            if total_skipped_reads > 0:
-                logger.debug(
-                    f"   Skipped details: wrong_strand={skipped_wrong_strand}, "
-                    f"unmapped/dup/secondary={skipped_unmapped_dup_secondary}, "
-                    f"missing_tags={skipped_missing_tags}, no_sequence={skipped_no_sequence}"
-                )
 
         # Process each target position for each strand
         for pos in target_sites_list:
@@ -912,6 +906,9 @@ def count_mutations(
             total_processed = 0
             total_counts = 0
             total_skipped = 0  # Regions skipped (no reads)
+            total_raw_reads_all_workers = (
+                0  # New: Accumulate raw reads fetched from all workers
+            )
             total_reads_processed_all_workers = (
                 0  # Accumulate processed reads from all workers
             )
@@ -993,7 +990,8 @@ def count_mutations(
                             else:
                                 total_counts += len(result["counts"])
 
-                            # Accumulate processed and skipped reads from worker results
+                            # Accumulate raw reads, processed reads and skipped reads from worker results
+                            total_raw_reads_all_workers += result.get("total_reads", 0)
                             total_reads_processed_all_workers += result.get("reads", 0)
                             total_reads_skipped_all_workers += result.get(
                                 "skipped_reads", 0
@@ -1061,6 +1059,9 @@ def count_mutations(
             logger.info("✅ Processing completed!")
             logger.info(f"   Regions processed: {total_processed}")
             logger.info(f"   Regions skipped (no reads): {total_skipped}")
+            logger.info(
+                f"   Total raw reads: {total_raw_reads_all_workers}"
+            )  # New summary stat
             logger.info(
                 f"   Total reads processed: {total_reads_processed_all_workers}"
             )  # New summary stat
