@@ -883,14 +883,13 @@ def count_mutations(
                     )
                 )
 
-            # Process all regions with optimal parallelism
+            # Initialize counters and result lists
             total_processed = 0
             total_counts = 0
             total_skipped = 0
             total_reads = 0
             all_results = []
             all_timings: list[dict[str, float]] = []
-            # worker_temp_bams is now implicitly collected from temp_dir in _final_bam_processing
 
             # Write header immediately if outputting to stdout
             if output_file is None:
@@ -906,38 +905,38 @@ def count_mutations(
                 f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})"
             )
 
-            with Progress(
-                "[progress.description]{task.description}",
-                "[progress.percentage]{task.percentage:>3.0f}%",
-                "[cyan]{task.completed}/{task.total} regions",
-                "[green]{task.fields[counts]:,} mutations",
-                "[magenta]{task.fields[reads]:,} reads",
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-                expand=False,
-            ) as progress:
-                task = progress.add_task(
-                    "🔄 Processing regions...",
-                    total=len(worker_args),
-                    counts=0,
-                    reads=0,
-                )
+            # Use ProcessPoolExecutor for optimal parallelism
+            # This automatically handles load balancing and memory management
+            with ProcessPoolExecutor(
+                max_workers=threads,
+                initializer=_init_worker,
+                initargs=(samfile, reffile, temp_dir),
+            ) as executor:
+                # Submit warmup tasks to initialize workers
+                print("🚀 Warming up worker processes...")
+                warmup_futures = [
+                    executor.submit(_warmup_worker) for _ in range(threads)
+                ]
+                for future in as_completed(warmup_futures):
+                    future.result()  # Wait for each worker to initialize
+                print("✅ Workers warmed up. Submitting main tasks...")
 
-                # Use ProcessPoolExecutor for optimal parallelism
-                # This automatically handles load balancing and memory management
-                with ProcessPoolExecutor(
-                    max_workers=threads,
-                    initializer=_init_worker,
-                    initargs=(samfile, reffile, temp_dir),
-                ) as executor:
-                    # Submit warmup tasks to initialize workers
-                    print("🚀 Warming up worker processes...")
-                    warmup_futures = [
-                        executor.submit(_warmup_worker) for _ in range(threads)
-                    ]
-                    for future in as_completed(warmup_futures):
-                        future.result()  # Wait for each worker to initialize
-                    print("✅ Workers warmed up. Submitting main tasks...")
+                with Progress(
+                    "[progress.description]{task.description}",
+                    "[progress.percentage]{task.percentage:>3.0f}%",
+                    "[cyan]{task.completed}/{task.total} regions",
+                    "[green]{task.fields[counts]:,} mutations",
+                    "[magenta]{task.fields[reads]:,} reads",
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    expand=False,
+                ) as progress:
+                    task = progress.add_task(
+                        "🔄 Processing regions...",
+                        total=len(worker_args),
+                        counts=0,
+                        reads=0,
+                    )
 
                     # Submit all tasks at once for maximum parallelism
                     future_to_args = {
