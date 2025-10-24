@@ -22,7 +22,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import pysam
-from rich.progress import Progress, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from .utils import get_output_headers, write_output
 
@@ -940,14 +945,13 @@ def count_mutations(
                 initargs=(samfile, reffile, temp_dir),
             ) as executor:
                 # Use a simple Progress bar for warmup phase
-                with (
-                    Progress(
-                        "[progress.description]{task.description}",
-                        "[cyan]{task.completed}/{task.total} workers warmed up",  # Updated format
-                        TimeElapsedColumn(),
-                        expand=False,
-                    ) as warmup_progress
-                ):
+                with Progress(
+                    SpinnerColumn(), # Added spinner
+                    "[progress.description]{task.description}",
+                    "[cyan]{task.completed}/{task.total} workers warmed up",  # Updated format
+                    TimeElapsedColumn(),
+                    expand=False,
+                ) as warmup_progress:
                     warmup_task = warmup_progress.add_task(
                         "🚀 Warming up workers...", total=threads
                     )  # Simplified description
@@ -958,9 +962,12 @@ def count_mutations(
                     for future in as_completed(warmup_futures):
                         future.result()  # Wait for each worker to initialize
                         warmup_progress.update(warmup_task, advance=1)
+                # The warmup progress bar will now hide automatically.
+                logger.info("✅ Workers warmed up. Submitting main tasks...") # This message will appear after the bar hides
 
                 # Use a Live context to keep the progress bar at the bottom
                 with Progress(
+                    SpinnerColumn(), # Added spinner
                     "[progress.description]{task.description}",
                     "[progress.percentage]{task.percentage:>3.0f}%",
                     "[cyan]{task.completed}/{task.total} regions",
