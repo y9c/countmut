@@ -425,10 +425,6 @@ def main(
                     "  No sequence:",
                     f"{stats.get('total_skipped_no_sequence_agg', 0):,}",
                 )
-                stats_table.add_row(
-                    "  No valid bases:",
-                    f"{stats.get('total_reads_with_no_valid_bases_agg', 0):,}",
-                )
 
             final_panel = Panel(
                 stats_table,
