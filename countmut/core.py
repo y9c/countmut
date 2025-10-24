@@ -1090,6 +1090,11 @@ def count_mutations(
                     # Explicitly shut down the executor after all results are collected
                     executor.shutdown(wait=True)
 
+                logger.info(
+                    f"📊 Processed {total_processed} regions, {total_counts:,} mutations, "
+                    f"{total_reads_processed_all_workers:,} reads."
+                ) # New intermediate summary log
+
             # Write results to file if specified
             if output_file:
                 logger.info("📝 Writing results to file...")
@@ -1105,14 +1110,6 @@ def count_mutations(
             # Print summary
             elapsed_time = time.time() - start_time
             logger.info(f"✅ Processing completed! (⏱️ {elapsed_time:.2f}s)")
-            if total_reads_skipped_all_workers > 0:
-                logger.info(
-                    f"      Skipped details: wrong_strand={total_skipped_wrong_strand_agg}, "
-                    f"unmapped/dup/secondary={total_skipped_unmapped_dup_secondary_agg}, "
-                    f"missing_tags={total_skipped_missing_tags_agg}, "
-                    f"no_sequence={total_skipped_no_sequence_agg}")
-            if total_skipped > 0:
-                logger.info(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
 
             # Return key statistics for CLI to display in a final panel
             return {
