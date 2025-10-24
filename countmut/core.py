@@ -1056,7 +1056,7 @@ def count_mutations(
 
                 # Log the final progress bar state using directly accessible variables
                 logger.info(
-                    f"📊 Processing regions... 100% {total_processed}/{len(worker_args)} regions "
+                    f"📊 Processed {total_processed}/{len(worker_args)} regions "
                     f"{total_counts:,} mutations {total_reads_processed_all_workers:,} reads "
                     f"Finished in {time.time() - start_time:.2f}s"
                 )
@@ -1076,13 +1076,6 @@ def count_mutations(
             # Print summary
             elapsed_time = time.time() - start_time
             logger.info(f"✅ Processing completed! (⏱️ {elapsed_time:.2f}s)")
-            logger.info(f"   Regions processed: {total_processed}")
-            logger.info(f"   Regions skipped (no reads): {total_skipped}")
-            logger.info(f"   Total raw reads: {total_raw_reads_all_workers}")
-            logger.info(
-                f"   Total reads processed: {total_reads_processed_all_workers}"
-            )
-            logger.info(f"   Total reads skipped: {total_reads_skipped_all_workers}")
             if total_reads_skipped_all_workers > 0:
                 logger.info(
                     f"      Skipped details: wrong_strand={total_skipped_wrong_strand_agg}, "
@@ -1090,10 +1083,8 @@ def count_mutations(
                     f"missing_tags={total_skipped_missing_tags_agg}, "
                     f"no_sequence={total_skipped_no_sequence_agg}"
                 )
-            logger.info(f"   Total mutations found: {total_counts}")
-            # Removed: logger.info(f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec")
-            # Removed: logger.info(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
-            # Removed: logger.info(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
+            if total_skipped > 0:
+                logger.info(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
 
             # Return key statistics for CLI to display in a final panel
             return {
