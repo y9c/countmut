@@ -74,7 +74,10 @@ OPTION_GROUPS = {
                 "--min-mapq",
             ],
         },
-        {"name": "Miscellaneous Options", "options": ["--verbose", "--help", "--version"]},
+        {
+            "name": "Miscellaneous Options",
+            "options": ["--verbose", "--help", "--version"],
+        },
     ]
 }
 
@@ -308,7 +311,9 @@ def main(
 
         config_table.add_row("Input BAM:", input_bam_abs)
         config_table.add_row("Reference:", reference_fasta_abs)
-        config_table.add_row("Output:", output_file_abs if output_file_abs else "(stdout)")
+        config_table.add_row(
+            "Output:", output_file_abs if output_file_abs else "(stdout)"
+        )
         if output_bam_abs:
             config_table.add_row("Output BAM:", output_bam_abs)
         if ref_base2 and mut_base2:
@@ -393,19 +398,43 @@ def main(
                 "Total mutations found:", f"{stats['total_mutations_found']:,}"
             )
 
-            if stats['total_reads_skipped'] > 0:
+            if stats["total_reads_skipped"] > 0:
                 # Display detailed skipped reads only if there were skipped reads
                 stats_table.add_section()
                 stats_table.add_row("Skipped details:", "")
-                stats_table.add_row("  Wrong strand:", f"{stats.get('total_skipped_wrong_strand_agg', 0):,}")
-                stats_table.add_row("  Unmapped:", f"{stats.get('total_skipped_unmapped_agg', 0):,}") # New: Display unmapped
-                stats_table.add_row("  Duplicate:", f"{stats.get('total_skipped_duplicate_agg', 0):,}") # New: Display duplicate
-                stats_table.add_row("  Secondary:", f"{stats.get('total_skipped_secondary_agg', 0):,}") # New: Display secondary
-                stats_table.add_row("  Failed mismatch filter:", f"{stats.get('total_skipped_mismatch_filter_agg', 0):,}") # New: Display mismatch filter skipped
-                stats_table.add_row("  Failed mapping quality filter:", f"{stats.get('total_skipped_mapq_filter_agg', 0):,}") # New: Display mapq filter skipped
-                stats_table.add_row("  Failed conversion filter:", f"{stats.get('total_skipped_conversion_filter_agg', 0):,}") # New: Display conversion filter skipped
-                stats_table.add_row("  Missing tags:", f"{stats.get('total_skipped_missing_tags_agg', 0):,}")
-                stats_table.add_row("  No sequence:", f"{stats.get('total_skipped_no_sequence_agg', 0):,}")
+                stats_table.add_row(
+                    "  Wrong strand:",
+                    f"{stats.get('total_skipped_wrong_strand_agg', 0):,}",
+                )
+                stats_table.add_row(
+                    "  Unmapped:", f"{stats.get('total_skipped_unmapped_agg', 0):,}"
+                )  # New: Display unmapped
+                stats_table.add_row(
+                    "  Duplicate:", f"{stats.get('total_skipped_duplicate_agg', 0):,}"
+                )  # New: Display duplicate
+                stats_table.add_row(
+                    "  Secondary:", f"{stats.get('total_skipped_secondary_agg', 0):,}"
+                )  # New: Display secondary
+                stats_table.add_row(
+                    "  Failed mismatch filter:",
+                    f"{stats.get('total_skipped_mismatch_filter_agg', 0):,}",
+                )  # New: Display mismatch filter skipped
+                stats_table.add_row(
+                    "  Failed mapping quality filter:",
+                    f"{stats.get('total_skipped_mapq_filter_agg', 0):,}",
+                )  # New: Display mapq filter skipped
+                stats_table.add_row(
+                    "  Failed conversion filter:",
+                    f"{stats.get('total_skipped_conversion_filter_agg', 0):,}",
+                )  # New: Display conversion filter skipped
+                stats_table.add_row(
+                    "  Missing tags:",
+                    f"{stats.get('total_skipped_missing_tags_agg', 0):,}",
+                )
+                stats_table.add_row(
+                    "  No sequence:",
+                    f"{stats.get('total_skipped_no_sequence_agg', 0):,}",
+                )
 
             final_panel = Panel(
                 stats_table,

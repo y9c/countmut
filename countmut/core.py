@@ -322,12 +322,12 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         # Process all reads in the region
         total_reads = 0
         skipped_wrong_strand = 0
-        skipped_unmapped = 0 # New: skipped due to unmapped
-        skipped_duplicate = 0 # New: skipped due to duplicate
-        skipped_secondary = 0 # New: skipped due to secondary
-        skipped_mismatch_filter = 0 # New: skipped due to mismatch filter
-        skipped_mapq_filter = 0 # New: skipped due to mapq filter
-        skipped_conversion_filter = 0 # New: skipped due to conversion filter
+        skipped_unmapped = 0  # New: skipped due to unmapped
+        skipped_duplicate = 0  # New: skipped due to duplicate
+        skipped_secondary = 0  # New: skipped due to secondary
+        skipped_mismatch_filter = 0  # New: skipped due to mismatch filter
+        skipped_mapq_filter = 0  # New: skipped due to mapq filter
+        skipped_conversion_filter = 0  # New: skipped due to conversion filter
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
@@ -433,7 +433,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 if read.mapping_quality < min_mapq:
                     skipped_mapq_filter += 1
                     if outfile:
-                        outfile.write(read) # Write unmodified read
+                        outfile.write(read)  # Write unmodified read
                     continue
 
                 # Check mismatch filter (read-level filter)
@@ -510,7 +510,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     # If any of the remaining filters fail, this base is considered dropped (low_quality)
                     if not (
                         is_internal
-                        and passes_baseq_filter # Only these two are now base-level filters
+                        and passes_baseq_filter  # Only these two are now base-level filters
                     ):
                         # Even if dropped, we still keep the best observation to correctly populate low_quality_count
                         if (prev is None) or (base_qual > prev[2]):
@@ -518,11 +518,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                 actual_strand,
                                 query_base,
                                 base_qual,
-                                False, # is_internal (false if dropped)
-                                False, # passes_baseq_filter (false if dropped)
-                                False, # passes_conversion_filter (false if dropped at base level)
+                                False,  # is_internal (false if dropped)
+                                False,  # passes_baseq_filter (false if dropped)
+                                False,  # passes_conversion_filter (false if dropped at base level)
                             )
-                        continue # Skip further processing for this base as it's low quality
+                        continue  # Skip further processing for this base as it's low quality
 
                     # If all quality filters pass, proceed to store the best observation
                     if (prev is None) or (base_qual > prev[2]):
@@ -532,7 +532,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             base_qual,
                             bool(is_internal),
                             bool(passes_baseq_filter),
-                            True, # passes_conversion_filter (always true at this point, since read-level filter passed)
+                            True,  # passes_conversion_filter (always true at this point, since read-level filter passed)
                         )
                     # Removed: read_contributes_to_counts = True # Flag no longer needed
 
@@ -560,19 +560,16 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             strand_symbol,
             query_base,
             _q,
-            is_internal, # Keep this, used below
-            passes_baseq_filter, # Keep this, used below
-            passes_conversion_filter, # Keep this, used below for counting
+            is_internal,  # Keep this, used below
+            passes_baseq_filter,  # Keep this, used below
+            passes_conversion_filter,  # Keep this, used below for counting
         ) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
                 continue
 
             # Count in low_quality if ANY quality filter fails
-            if not (
-                is_internal
-                and passes_baseq_filter
-            ):
+            if not (is_internal and passes_baseq_filter):
                 position_data[ref_pos][strand_symbol]["low_quality_count"][
                     query_base
                 ] += 1
@@ -595,9 +592,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             + skipped_unmapped
             + skipped_duplicate
             + skipped_secondary
-            + skipped_mismatch_filter # New: Include reads skipped by mismatch filter
-            + skipped_mapq_filter # New: Include reads skipped by mapq filter
-            + skipped_conversion_filter # New: Include reads skipped by conversion filter
+            + skipped_mismatch_filter  # New: Include reads skipped by mismatch filter
+            + skipped_mapq_filter  # New: Include reads skipped by mapq filter
+            + skipped_conversion_filter  # New: Include reads skipped by conversion filter
             + skipped_missing_tags
             + skipped_no_sequence
             # Removed: + reads_with_no_valid_bases # Include reads that passed initial filters but had no valid bases
@@ -666,18 +663,18 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "reads": processed_reads,
             "total_reads": total_reads,  # Total reads for this region
             "skipped": is_skipped,  # Correctly reflect if the region was skipped
-            "skipped_reads": total_skipped_reads, # Total reads skipped in this region
+            "skipped_reads": total_skipped_reads,  # Total reads skipped in this region
             "skipped_wrong_strand": skipped_wrong_strand,
-            "skipped_unmapped": skipped_unmapped, # New: individual skipped count
-            "skipped_duplicate": skipped_duplicate, # New: individual skipped count
-            "skipped_secondary": skipped_secondary, # New: individual skipped count
-            "skipped_mismatch_filter": skipped_mismatch_filter, # New: individual skipped count
-            "skipped_mapq_filter": skipped_mapq_filter, # New: individual skipped count
-            "skipped_conversion_filter": skipped_conversion_filter, # New: individual skipped count
+            "skipped_unmapped": skipped_unmapped,  # New: individual skipped count
+            "skipped_duplicate": skipped_duplicate,  # New: individual skipped count
+            "skipped_secondary": skipped_secondary,  # New: individual skipped count
+            "skipped_mismatch_filter": skipped_mismatch_filter,  # New: individual skipped count
+            "skipped_mapq_filter": skipped_mapq_filter,  # New: individual skipped count
+            "skipped_conversion_filter": skipped_conversion_filter,  # New: individual skipped count
             "skipped_missing_tags": skipped_missing_tags,
             "skipped_no_sequence": skipped_no_sequence,
             # Removed: "reads_with_no_valid_bases": reads_with_no_valid_bases, # New: Detailed skipped count
-            "temp_bam_path": _WORKER_SHARD_PATH, # Path to the temporary BAM file for this worker
+            "temp_bam_path": _WORKER_SHARD_PATH,  # Path to the temporary BAM file for this worker
             "timings": {
                 "total": time.time() - overall_start
             },  # Use the already constructed timings dictionary
@@ -976,12 +973,18 @@ def count_mutations(
             )
             # Detailed skipped read counts across all workers
             total_skipped_wrong_strand_agg = 0
-            total_skipped_unmapped_agg = 0 # New: Aggregated unmapped reads
-            total_skipped_duplicate_agg = 0 # New: Aggregated duplicate reads
-            total_skipped_secondary_agg = 0 # New: Aggregated secondary reads
-            total_skipped_mismatch_filter_agg = 0 # New: Aggregated mismatch filter skipped reads
-            total_skipped_mapq_filter_agg = 0 # New: Aggregated mapq filter skipped reads
-            total_skipped_conversion_filter_agg = 0 # New: Aggregated conversion filter skipped reads
+            total_skipped_unmapped_agg = 0  # New: Aggregated unmapped reads
+            total_skipped_duplicate_agg = 0  # New: Aggregated duplicate reads
+            total_skipped_secondary_agg = 0  # New: Aggregated secondary reads
+            total_skipped_mismatch_filter_agg = (
+                0  # New: Aggregated mismatch filter skipped reads
+            )
+            total_skipped_mapq_filter_agg = (
+                0  # New: Aggregated mapq filter skipped reads
+            )
+            total_skipped_conversion_filter_agg = (
+                0  # New: Aggregated conversion filter skipped reads
+            )
             total_skipped_missing_tags_agg = 0
             total_skipped_no_sequence_agg = 0
             # Removed: total_reads_with_no_valid_bases_agg = 0 # Accumulator no longer needed
@@ -1014,16 +1017,20 @@ def count_mutations(
                 console = Console()
 
                 # Use a simple Progress bar for warmup phase
-                with Progress(
-                    SpinnerColumn(),
-                    "[progress.description]{task.description}",
-                    "[cyan]{task.completed}/{task.total} workers warmed up",
-                    TimeElapsedColumn(),
-                    expand=False,
-                    console=console, # Added console for transient behavior
-                    transient=True, # Added transient=True to hide the bar after completion
-                ) as warmup_progress:
-                    warmup_task = warmup_progress.add_task("🚀 Warming up workers...", total=threads)
+                with (
+                    Progress(
+                        SpinnerColumn(),
+                        "[progress.description]{task.description}",
+                        "[cyan]{task.completed}/{task.total} workers warmed up",
+                        TimeElapsedColumn(),
+                        expand=False,
+                        console=console,  # Added console for transient behavior
+                        transient=True,  # Added transient=True to hide the bar after completion
+                    ) as warmup_progress
+                ):
+                    warmup_task = warmup_progress.add_task(
+                        "🚀 Warming up workers...", total=threads
+                    )
 
                     warmup_futures = [
                         executor.submit(_warmup_worker) for _ in range(threads)
@@ -1032,7 +1039,9 @@ def count_mutations(
                         future.result()  # Wait for each worker to initialize
                         warmup_progress.update(warmup_task, advance=1)
                 # The warmup progress bar will now hide automatically.
-                logger.info("✅ Workers warmed up. Submitting main tasks...") # This message will appear after the bar hides
+                logger.info(
+                    "✅ Workers warmed up. Submitting main tasks..."
+                )  # This message will appear after the bar hides
 
                 # Use a Live context to keep the progress bar at the bottom
                 with Progress(
@@ -1045,8 +1054,8 @@ def count_mutations(
                     TimeElapsedColumn(),
                     TimeRemainingColumn(),
                     expand=False,
-                    console=console, # Ensure console is passed for transient behavior
-                    transient=True, # Make the main progress bar transient
+                    console=console,  # Ensure console is passed for transient behavior
+                    transient=True,  # Make the main progress bar transient
                 ) as progress:
                     task = progress.add_task(
                         "🔄 Processing regions...",
@@ -1080,15 +1089,33 @@ def count_mutations(
                             )
 
                             # Accumulate detailed skipped read counts
-                            total_skipped_wrong_strand_agg += result.get("skipped_wrong_strand", 0)
-                            total_skipped_unmapped_agg += result.get("skipped_unmapped", 0) # New: Accumulate unmapped
-                            total_skipped_duplicate_agg += result.get("skipped_duplicate", 0) # New: Accumulate duplicate
-                            total_skipped_secondary_agg += result.get("skipped_secondary", 0) # New: Accumulate secondary
-                            total_skipped_mismatch_filter_agg += result.get("skipped_mismatch_filter", 0) # New: Accumulate mismatch filter skipped
-                            total_skipped_mapq_filter_agg += result.get("skipped_mapq_filter", 0) # New: Accumulate mapq filter skipped
-                            total_skipped_conversion_filter_agg += result.get("skipped_conversion_filter", 0) # New: Accumulate conversion filter skipped
-                            total_skipped_missing_tags_agg += result.get("skipped_missing_tags", 0)
-                            total_skipped_no_sequence_agg += result.get("skipped_no_sequence", 0)
+                            total_skipped_wrong_strand_agg += result.get(
+                                "skipped_wrong_strand", 0
+                            )
+                            total_skipped_unmapped_agg += result.get(
+                                "skipped_unmapped", 0
+                            )  # New: Accumulate unmapped
+                            total_skipped_duplicate_agg += result.get(
+                                "skipped_duplicate", 0
+                            )  # New: Accumulate duplicate
+                            total_skipped_secondary_agg += result.get(
+                                "skipped_secondary", 0
+                            )  # New: Accumulate secondary
+                            total_skipped_mismatch_filter_agg += result.get(
+                                "skipped_mismatch_filter", 0
+                            )  # New: Accumulate mismatch filter skipped
+                            total_skipped_mapq_filter_agg += result.get(
+                                "skipped_mapq_filter", 0
+                            )  # New: Accumulate mapq filter skipped
+                            total_skipped_conversion_filter_agg += result.get(
+                                "skipped_conversion_filter", 0
+                            )  # New: Accumulate conversion filter skipped
+                            total_skipped_missing_tags_agg += result.get(
+                                "skipped_missing_tags", 0
+                            )
+                            total_skipped_no_sequence_agg += result.get(
+                                "skipped_no_sequence", 0
+                            )
                             # Removed: total_reads_with_no_valid_bases_agg += result.get("reads_with_no_valid_bases", 0) # Accumulate new counter
 
                             if result.get("timings"):
@@ -1151,12 +1178,12 @@ def count_mutations(
                 "total_mutations_found": total_counts,
                 "elapsed_time": elapsed_time,
                 "total_skipped_wrong_strand_agg": total_skipped_wrong_strand_agg,
-                "total_skipped_unmapped_agg": total_skipped_unmapped_agg, # New: return aggregated unmapped
-                "total_skipped_duplicate_agg": total_skipped_duplicate_agg, # New: return aggregated duplicate
-                "total_skipped_secondary_agg": total_skipped_secondary_agg, # New: return aggregated secondary
-                "total_skipped_mismatch_filter_agg": total_skipped_mismatch_filter_agg, # New: return aggregated mismatch filter skipped
-                "total_skipped_mapq_filter_agg": total_skipped_mapq_filter_agg, # New: return aggregated mapq filter skipped
-                "total_skipped_conversion_filter_agg": total_skipped_conversion_filter_agg, # New: return aggregated conversion filter skipped
+                "total_skipped_unmapped_agg": total_skipped_unmapped_agg,  # New: return aggregated unmapped
+                "total_skipped_duplicate_agg": total_skipped_duplicate_agg,  # New: return aggregated duplicate
+                "total_skipped_secondary_agg": total_skipped_secondary_agg,  # New: return aggregated secondary
+                "total_skipped_mismatch_filter_agg": total_skipped_mismatch_filter_agg,  # New: return aggregated mismatch filter skipped
+                "total_skipped_mapq_filter_agg": total_skipped_mapq_filter_agg,  # New: return aggregated mapq filter skipped
+                "total_skipped_conversion_filter_agg": total_skipped_conversion_filter_agg,  # New: return aggregated conversion filter skipped
                 "total_skipped_missing_tags_agg": total_skipped_missing_tags_agg,
                 "total_skipped_no_sequence_agg": total_skipped_no_sequence_agg,
                 # Removed: "total_reads_with_no_valid_bases_agg": total_reads_with_no_valid_bases_agg, # Add to return dict
