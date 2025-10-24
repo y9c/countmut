@@ -343,10 +343,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         total_skipped_reads = 0
 
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
-        # Value: (strand, base, qual, is_internal, is_mapped, is_converted, is_baseq_passing, is_conversion_passing)
+        # Value: (strand, base, qual, is_internal, passes_baseq_filter, passes_conversion_filter)
         best_obs: dict[
             tuple[int, str],
-            tuple[str, str, int, bool, bool, bool, bool, bool],
+            tuple[str, str, int, bool, bool, bool],
         ] = {}
 
         reads_to_process = samfile.fetch(region_chrom, region_start, region_end)
@@ -525,8 +525,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                 query_base,
                                 base_qual,
                                 False, # is_internal (false if dropped)
-                                False, # passes_mismatch_filter (no longer applicable here)
-                                False, # passes_mapq_filter (no longer applicable here)
                                 False, # passes_baseq_filter (false if dropped)
                                 False, # passes_conversion_filter (false if dropped at base level)
                             )
@@ -539,8 +537,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             query_base,
                             base_qual,
                             bool(is_internal),
-                            True, # passes_mismatch_filter (always true at this point)
-                            True, # passes_mapq_filter (always true at this point)
                             bool(passes_baseq_filter),
                             True, # passes_conversion_filter (always true at this point, since read-level filter passed)
                         )
@@ -571,8 +567,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             query_base,
             _q,
             is_internal, # Keep this, used below
-            _, # passes_mismatch_filter is no longer used here
-            _, # passes_mapq_filter is no longer used here
             passes_baseq_filter, # Keep this, used below
             passes_conversion_filter, # Keep this, used below for counting
         ) in best_obs.items():
