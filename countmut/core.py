@@ -10,6 +10,7 @@ Date: 2025-10-23
 """
 
 import atexit
+import glob
 import logging
 import os
 import shutil
@@ -63,10 +64,33 @@ _GLOBAL_SAM = None
 _GLOBAL_REF = None
 
 
-def _init_worker(samfile_path: str, reffile_path: str) -> None:
+# New globals for worker-specific BAM writer
+_WORKER_SHARD_PATH = None
+_WORKER_WRITER = None
+_WORKER_ID = None
+
+# Special value to identify shutdown tasks
+_SHUTDOWN_SENTINEL = "__SHUTDOWN__"
+
+
+def _worker_shutdown_task():
+    """Special task to close worker files before process termination."""
+    global _WORKER_WRITER
+    try:
+        if _WORKER_WRITER is not None:
+            _WORKER_WRITER.close()
+            _WORKER_WRITER = None
+    except Exception:
+        pass
+    return {"shutdown": True}
+
+
+def _init_worker(samfile_path: str, reffile_path: str, shard_dir: str) -> None:
     """Open BAM/FASTA once per process to avoid repeated open/close overhead and enable BGZF threads."""
-    global _GLOBAL_SAM, _GLOBAL_REF
-    _GLOBAL_SAM = pysam.AlignmentFile(samfile_path, "rb")
+    global _GLOBAL_SAM, _GLOBAL_REF, _WORKER_SHARD_PATH, _WORKER_WRITER, _WORKER_ID
+    # Only create reader once per worker process
+    if _GLOBAL_SAM is None:
+        _GLOBAL_SAM = pysam.AlignmentFile(samfile_path, "rb")
     try:
         # Enable multi-threaded BGZF decompression for faster reading
         _GLOBAL_SAM.set_threads(2)
@@ -74,7 +98,11 @@ def _init_worker(samfile_path: str, reffile_path: str) -> None:
         pass
     _GLOBAL_REF = pysam.FastaFile(reffile_path)
 
-    import atexit
+    # Create a unique shard path for this worker
+    pid = os.getpid()
+    _WORKER_SHARD_PATH = os.path.join(shard_dir, f"shard_{pid}.bam")
+    _WORKER_WRITER = None  # Lazily initialized
+    _WORKER_ID = pid  # Store the worker ID (using PID)
 
     def _cleanup() -> None:
         try:
@@ -85,6 +113,11 @@ def _init_worker(samfile_path: str, reffile_path: str) -> None:
         try:
             if _GLOBAL_REF is not None:
                 _GLOBAL_REF.close()
+        except Exception:
+            pass
+        try:
+            if _WORKER_WRITER is not None:
+                _WORKER_WRITER.close()
         except Exception:
             pass
 
@@ -176,14 +209,19 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             max_sub,
             min_baseq,
             min_mapq,
-            worker_id,
+            # worker_id is now a global, removed from args unpacking
         ) = args
 
-        # Setup for optional BAM writing
-        outfile = None
-        if temp_bam_path:
-            with pysam.AlignmentFile(samfile_path, "rb") as infile:
-                outfile = pysam.AlignmentFile(temp_bam_path, "wb", header=infile.header)
+        # Get worker-specific BAM writer
+        global _WORKER_SHARD_PATH, _WORKER_WRITER, _GLOBAL_SAM, _WORKER_ID
+        worker_id = _WORKER_ID  # Retrieve from global
+
+        # Setup for optional BAM writing to the worker's shard file
+        if _WORKER_SHARD_PATH and _WORKER_WRITER is None:
+            _WORKER_WRITER = pysam.AlignmentFile(
+                _WORKER_SHARD_PATH, "wb", header=_GLOBAL_SAM.header
+            )
+        outfile = _WORKER_WRITER
 
         # Require per-process global handles (must be initialized by pool initializer)
         if _GLOBAL_SAM is None or _GLOBAL_REF is None:
@@ -331,8 +369,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                     elif query_base_revcomp == mut_base2:
                                         alt_mut_count += 1
 
-                    read.set_tag("Yc", alt_mut_count, "i")
                     read.set_tag("Zc", alt_ref_count, "i")
+                    read.set_tag("Yc", alt_mut_count, "i")
 
                     if read.has_tag("NS"):
                         ns_val = read.get_tag("NS")
@@ -341,14 +379,20 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 # Skip if we don't want to process this strand
                 if process_forward_only and actual_strand != "+":
                     skipped_wrong_strand += 1
+                    if outfile:
+                        outfile.write(read)  # Write unmodified read on error
                     continue
                 if process_reverse_only and actual_strand != "-":
                     skipped_wrong_strand += 1
+                    if outfile:
+                        outfile.write(read)  # Write unmodified read on error
                     continue
 
                 # Skip reads with deletions or reference skips
                 if read.is_unmapped or read.is_duplicate or read.is_secondary:
                     skipped_unmapped_dup_secondary += 1
+                    if outfile:
+                        outfile.write(read)  # Write unmodified read on error
                     continue
 
                 # Get read properties (avoid exceptions on missing tags)
@@ -356,6 +400,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")
                 ):
                     skipped_missing_tags += 1
+                    if outfile:
+                        outfile.write(read)  # Write unmodified read on error
                     continue
 
                 # Check mapping quality
@@ -374,6 +420,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 query_sequence = read.query_sequence
                 if not query_sequence:
                     skipped_no_sequence += 1
+                    if outfile:
+                        outfile.write(read)  # Write unmodified read on error
                     continue
                 query_qualities = read.query_qualities or []
 
@@ -441,7 +489,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 continue
 
             if outfile:
-                outfile.write(read)
+                outfile.write(
+                    read
+                )  # Write the (potentially modified) read to the shard
 
         # Apply best observations to position counts (deduplicated across overlapping mates)
         for (ref_pos, _qname), (
@@ -561,9 +611,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "reads": processed_reads,
             "total_reads": total_reads,
             "skipped_reads": total_skipped,
-            "temp_bam_path": temp_bam_path if outfile else None,
+            "temp_bam_path": _WORKER_SHARD_PATH,
             "timings": {"total": time.time() - overall_start},
         }
+
     except Exception as e:
         logger.error(f"Error in worker {worker_id}: {e}")
         return {
@@ -661,7 +712,7 @@ def count_mutations(
         mut_base2 = mut_base2.upper()
 
     try:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="countmut_") as temp_dir:
             if tagging_enabled:
                 print(
                     f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
@@ -802,9 +853,6 @@ def count_mutations(
             # Prepare worker arguments - now process both strands in one worker
             worker_args = []
             for i, (chrom, bin_start, bin_end) in enumerate(filtered_bin_list):
-                temp_bam_path = (
-                    os.path.join(temp_dir, f"temp_{i}.bam") if tagging_enabled else None
-                )
                 worker_args.append(
                     (
                         samfile,
@@ -816,7 +864,7 @@ def count_mutations(
                         mut_base,
                         ref_base2,
                         mut_base2,
-                        temp_bam_path,
+                        # temp_bam_path is now handled by _init_worker
                         save_rest,
                         pad,
                         trim_start,
@@ -837,7 +885,7 @@ def count_mutations(
             total_reads = 0
             all_results = []
             all_timings: list[dict[str, float]] = []
-            worker_temp_bams = []
+            # worker_temp_bams is now implicitly collected from temp_dir in _final_bam_processing
 
             # Write header immediately if outputting to stdout
             if output_file is None:
@@ -875,7 +923,7 @@ def count_mutations(
                 with ProcessPoolExecutor(
                     max_workers=threads,
                     initializer=_init_worker,
-                    initargs=(samfile, reffile),
+                    initargs=(samfile, reffile, temp_dir),
                 ) as executor:
                     # Submit all tasks at once for maximum parallelism
                     future_to_args = {
@@ -908,9 +956,6 @@ def count_mutations(
                                 # Collect for file output
                                 all_results.extend(result["counts"])
 
-                            if result.get("temp_bam_path"):
-                                worker_temp_bams.append(result["temp_bam_path"])
-
                         else:
                             logger.warning(
                                 f"Failed to process region {result['region']}: {result['error']}"
@@ -921,6 +966,17 @@ def count_mutations(
                             task, advance=1, counts=total_counts, reads=total_reads
                         )
 
+                    # Explicitly shut down the executor after all results are collected
+                    executor.shutdown(wait=True)
+
+                    # Now, submit shutdown tasks to trigger graceful closing of worker writers
+                    # This needs a new executor if the old one is already shut down.
+                    # However, for `ProcessPoolExecutor`, `shutdown()` waits for all tasks to complete.
+                    # So, simply calling shutdown after all results are collected should be enough.
+                    # The `_worker_shutdown_task` is now part of atexit, so no explicit submission needed.
+                    # We only need to ensure the main executor shuts down properly.
+                    pass
+
             # Write results to file if specified
             if output_file:
                 print("📝 Writing results to file...")
@@ -930,12 +986,7 @@ def count_mutations(
 
             # Merge, sort, and index temporary BAM files if tagging was enabled
             _final_bam_processing(
-                tagging_enabled,
-                worker_temp_bams,
-                output_bam,
-                threads,
-                temp_dir,
-                samfile,
+                tagging_enabled, output_bam, threads, temp_dir, samfile
             )
 
             # Print summary
@@ -972,7 +1023,6 @@ def count_mutations(
 
 def _final_bam_processing(
     tagging_enabled: bool,
-    worker_temp_bams: list[str],
     output_bam: str | None,
     threads: int,
     temp_dir: str,
@@ -981,8 +1031,8 @@ def _final_bam_processing(
     """
     Handles merging, sorting, and indexing of temporary BAM files.
     """
-    if tagging_enabled and worker_temp_bams:
-        print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
+    if tagging_enabled:
+        print(f"Merging {len(os.listdir(temp_dir))} temporary BAM files...")
 
         final_tagged_bam = (
             output_bam or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
@@ -990,7 +1040,12 @@ def _final_bam_processing(
 
         try:
             # Use pysam cat for robust merging
-            pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
+            # This glob pattern should pick up all shard_*.bam files created by workers
+            pysam.cat(
+                "-o",
+                final_tagged_bam,
+                *glob.glob(os.path.join(temp_dir, "shard_*.bam")),
+            )
 
             print("Sorting and indexing final BAM...")
             sorted_bam_path = final_tagged_bam + ".sorted"
