@@ -569,6 +569,10 @@ def count_mutations(
     """
     start_time = time.time()
 
+    # Convert bases to uppercase once at the beginning
+    ref_base = ref_base.upper()
+    mut_base = mut_base.upper()
+
     # Validate input files exist
     if not os.path.exists(samfile):
         print(f"❌ Input BAM file '{samfile}' does not exist!")
@@ -605,12 +609,12 @@ def count_mutations(
 
     # Validate base parameters
     valid_bases = {"A", "T", "G", "C"}
-    if ref_base.upper() not in valid_bases:
+    if ref_base not in valid_bases:
         print(
             f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
         )
         return False
-    if mut_base.upper() not in valid_bases:
+    if mut_base not in valid_bases:
         print(
             f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
         )
@@ -707,8 +711,8 @@ def count_mutations(
                     bin_start,
                     bin_end,
                     strand,  # Pass the strand option to worker
-                    ref_base.upper(),
-                    mut_base.upper(),
+                    ref_base,
+                    mut_base,
                     save_rest,
                     pad,
                     trim_start,
