@@ -34,13 +34,12 @@ def format_duration(sec: float) -> str:
     return f"{hours}h {minutes}m {seconds}s"
 
 
-def get_output_headers(save_rest: bool = False, include_alt: bool = False) -> list[str]:
+def get_output_headers(save_rest: bool = False) -> list[str]:
     """
     Get the appropriate output headers based on save_rest parameter.
 
     Args:
         save_rest: Whether to include additional statistics columns
-        include_alt: Whether to include alternative mutation columns
     Returns:
         List of column headers
         - u0, u1, u2: unconverted (reference base) counts
@@ -61,8 +60,6 @@ def get_output_headers(save_rest: bool = False, include_alt: bool = False) -> li
     ]
     if save_rest:
         headers.extend(["o0", "o1", "o2"])
-    if include_alt:
-        headers.extend(["alt_ref", "alt_mut"])
     return headers
 
 
@@ -84,16 +81,13 @@ def write_output(
         if output_file:
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             with open(output_file, "w") as out_f:
-                out_f.write("\t".join(get_output_headers(save_rest, False)) + "\n")
+                out_f.write("\t".join(get_output_headers(save_rest)) + "\n")
         else:
-            print("\t".join(get_output_headers(save_rest, False)))
+            print("\t".join(get_output_headers(save_rest)))
         return
 
-    # Determine if alternative mutation counts are present
-    num_cols = len(results[0])
-    base_cols = 13 if save_rest else 10  # Corrected calculation
-    include_alt = num_cols > base_cols
-    headers = get_output_headers(save_rest, include_alt)
+    # headers are always generated without alt_ref/alt_mut for TSV output
+    headers = get_output_headers(save_rest)
 
     if output_file:
         # Ensure output directory exists
