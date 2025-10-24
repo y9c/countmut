@@ -8,7 +8,6 @@ groups for better readability and user experience.
 
 Author: Ye Chang
 Date: 2025-10-23
-Version: 0.0.2
 """
 
 import os

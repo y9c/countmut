@@ -22,8 +22,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import pysam
-from rich.console import Console  # Added Console for Live context
-from rich.live import Live  # Added Live for persistent progress bar
 from rich.progress import Progress, TimeElapsedColumn, TimeRemainingColumn
 
 from .utils import get_output_headers, write_output
@@ -941,116 +939,116 @@ def count_mutations(
                 initializer=_init_worker,
                 initargs=(samfile, reffile, temp_dir),
             ) as executor:
-                # Submit warmup tasks to initialize workers
-                logger.info("🚀 Warming up worker processes...")
-                warmup_futures = [
-                    executor.submit(_warmup_worker) for _ in range(threads)
-                ]
-                for future in as_completed(warmup_futures):
-                    future.result()  # Wait for each worker to initialize
-                logger.info("✅ Workers warmed up. Submitting main tasks...")
+                # Use a simple Progress bar for warmup phase
+                with (
+                    Progress(
+                        "[progress.description]{task.description}",
+                        "[cyan]{task.completed}/{task.total} workers warmed up",  # Updated format
+                        TimeElapsedColumn(),
+                        expand=False,
+                    ) as warmup_progress
+                ):
+                    warmup_task = warmup_progress.add_task(
+                        "🚀 Warming up workers...", total=threads
+                    )  # Simplified description
 
-                # Initialize rich console once for consistent output
-                console = Console()
+                    warmup_futures = [
+                        executor.submit(_warmup_worker) for _ in range(threads)
+                    ]
+                    for future in as_completed(warmup_futures):
+                        future.result()  # Wait for each worker to initialize
+                        warmup_progress.update(warmup_task, advance=1)
 
                 # Use a Live context to keep the progress bar at the bottom
-                with Live(
-                    console=console,
-                    screen=True,
-                    auto_refresh=True,
-                    vertical_overflow="visible",
-                ) as live:
-                    with Progress(
-                        "[progress.description]{task.description}",
-                        "[progress.percentage]{task.percentage:>3.0f}%",
-                        "[cyan]{task.completed}/{task.total} regions",
-                        "[green]{task.fields[counts]:,} mutations",
-                        "[magenta]{task.fields[reads]:,} reads",
-                        TimeElapsedColumn(),
-                        TimeRemainingColumn(),
-                        expand=False,
-                    ) as progress:
-                        task = progress.add_task(
-                            "🔄 Processing regions...",
-                            total=len(worker_args),
-                            counts=0,
-                            reads=0,
-                        )
+                with Progress(
+                    "[progress.description]{task.description}",
+                    "[progress.percentage]{task.percentage:>3.0f}%",
+                    "[cyan]{task.completed}/{task.total} regions",
+                    "[green]{task.fields[counts]:,} mutations",
+                    "[magenta]{task.fields[reads]:,} reads",
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    expand=False,
+                ) as progress:
+                    task = progress.add_task(
+                        "🔄 Processing regions...",
+                        total=len(worker_args),
+                        counts=0,
+                        reads=0,
+                    )
 
-                        # Submit all tasks at once for maximum parallelism
-                        future_to_args = {
-                            executor.submit(parse_region_worker, args): args
-                            for args in worker_args
-                        }
+                    # Submit all tasks at once for maximum parallelism
+                    future_to_args = {
+                        executor.submit(parse_region_worker, args): args
+                        for args in worker_args
+                    }
 
-                        # Process results as they complete and stream output
-                        for future in as_completed(future_to_args):
-                            result = future.result()
-                            total_processed += 1
+                    # Process results as they complete and stream output
+                    for future in as_completed(future_to_args):
+                        result = future.result()
+                        total_processed += 1
 
-                            if result["success"]:
-                                if result.get("skipped", False):
-                                    total_skipped += 1  # Count of regions skipped
-                                else:
-                                    total_counts += len(result["counts"])
-
-                                # Accumulate raw reads, processed reads and skipped reads from worker results
-                                total_raw_reads_all_workers += result.get(
-                                    "total_reads", 0
-                                )
-                                total_reads_processed_all_workers += result.get(
-                                    "reads", 0
-                                )
-                                total_reads_skipped_all_workers += result.get(
-                                    "skipped_reads", 0
-                                )
-
-                                # Accumulate detailed skipped read counts
-                                total_skipped_wrong_strand_agg += result.get(
-                                    "skipped_wrong_strand", 0
-                                )
-                                total_skipped_unmapped_dup_secondary_agg += result.get(
-                                    "skipped_unmapped_dup_secondary", 0
-                                )
-                                total_skipped_missing_tags_agg += result.get(
-                                    "skipped_missing_tags", 0
-                                )
-                                total_skipped_no_sequence_agg += result.get(
-                                    "skipped_no_sequence", 0
-                                )
-
-                                if result.get("timings"):
-                                    all_timings.append(result["timings"])
-
-                                # Stream results immediately if outputting to stdout
-                                if output_file is None and result["counts"]:
-                                    for row in result["counts"]:
-                                        sys.stdout.write(
-                                            "\t".join(map(str, row)) + "\n"
-                                        )
-                                        sys.stdout.flush()
-                                else:
-                                    # Collect for file output
-                                    all_results.extend(result["counts"])
-
+                        if result["success"]:
+                            if result.get("skipped", False):
+                                total_skipped += 1  # Count of regions skipped
                             else:
-                                logger.warning(
-                                    f"Failed to process region {result['region']}: {result['error']}"
-                                )
+                                total_counts += len(result["counts"])
 
-                            # Update progress with total mutations and reads processed
-                            progress.update(
-                                task,
-                                advance=1,
-                                counts=total_counts,
-                                reads=total_reads_processed_all_workers,
+                            # Accumulate raw reads, processed reads and skipped reads from worker results
+                            total_raw_reads_all_workers += result.get("total_reads", 0)
+                            total_reads_processed_all_workers += result.get("reads", 0)
+                            total_reads_skipped_all_workers += result.get(
+                                "skipped_reads", 0
                             )
 
-                        # Explicitly shut down the executor after all results are collected
-                        executor.shutdown(wait=True)
+                            # Accumulate detailed skipped read counts
+                            total_skipped_wrong_strand_agg += result.get(
+                                "skipped_wrong_strand", 0
+                            )
+                            total_skipped_unmapped_dup_secondary_agg += result.get(
+                                "skipped_unmapped_dup_secondary", 0
+                            )
+                            total_skipped_missing_tags_agg += result.get(
+                                "skipped_missing_tags", 0
+                            )
+                            total_skipped_no_sequence_agg += result.get(
+                                "skipped_no_sequence", 0
+                            )
 
-                    # Ensure the Live display is updated one last time
-                    live.refresh()
+                            if result.get("timings"):
+                                all_timings.append(result["timings"])
+
+                            # Stream results immediately if outputting to stdout
+                            if output_file is None and result["counts"]:
+                                for row in result["counts"]:
+                                    sys.stdout.write("\t".join(map(str, row)) + "\n")
+                                    sys.stdout.flush()
+                            else:
+                                # Collect for file output
+                                all_results.extend(result["counts"])
+
+                        else:
+                            logger.warning(
+                                f"Failed to process region {result['region']}: {result['error']}"
+                            )
+
+                        # Update progress with total mutations and reads processed
+                        progress.update(
+                            task,
+                            advance=1,
+                            counts=total_counts,
+                            reads=total_reads_processed_all_workers,
+                        )
+
+                    # Explicitly shut down the executor after all results are collected
+                    executor.shutdown(wait=True)
+
+                # Log the final progress bar state using directly accessible variables
+                logger.info(
+                    f"📊 Processing regions... 100% {total_processed}/{len(worker_args)} regions "
+                    f"{total_counts:,} mutations {total_reads_processed_all_workers:,} reads "
+                    f"Finished in {time.time() - start_time:.2f}s"
+                )
 
             # Write results to file if specified
             if output_file:
@@ -1088,6 +1086,7 @@ def count_mutations(
 
             # Return key statistics for CLI to display in a final panel
             return {
+                "success": True,
                 "total_processed_regions": total_processed,
                 "total_skipped_regions": total_skipped,
                 "total_raw_reads": total_raw_reads_all_workers,
@@ -1100,7 +1099,7 @@ def count_mutations(
     except Exception as e:
         logger.error(f"Error during processing: {e}")
         logger.error(f"❌ Processing failed: {e}")
-        return False
+        return {"success": False, "error": str(e)}
     finally:
         # Readers are shared per process and closed by initializer cleanup
         pass
