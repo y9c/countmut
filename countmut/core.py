@@ -30,9 +30,7 @@ from .utils import get_output_headers, write_output
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
@@ -724,59 +722,64 @@ def count_mutations(
         ref_base2 = ref_base2.upper()
         mut_base2 = mut_base2.upper()
 
+    # All validation and setup steps prior to main processing loop
     try:
+        # Check and create BAM index if needed
+        bam_index = samfile + ".bai"
+        if not os.path.exists(bam_index):
+            logger.info(f"📇 BAM index not found. Creating index: {bam_index}")
+            try:
+                pysam.index(samfile)
+                logger.info("✅ BAM index created successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to create BAM index: {e}")
+                return False
+
+        # Check and create FASTA index if needed
+        fasta_index = reffile + ".fai"
+        if not os.path.exists(fasta_index):
+            logger.info(f"📇 FASTA index not found. Creating index: {fasta_index}")
+            try:
+                pysam.faidx(reffile)
+                logger.info("✅ FASTA index created successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to create FASTA index: {e}")
+                return False
+
+        # Set default threads
+        if threads is None:
+            threads = min(os.cpu_count() or 1, 8)
+
+        # Validate base parameters
+        valid_bases = {"A", "T", "G", "C"}
+        if ref_base not in valid_bases:
+            logger.error(
+                f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
+            )
+            return False
+        if mut_base not in valid_bases:
+            logger.error(
+                f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
+            )
+            return False
+
+        logger.info("🔍 Validating BAM file...")
+        # Validate input files exist
+        if not os.path.exists(samfile):
+            logger.error(f"❌ Input BAM file '{samfile}' does not exist!")
+            return False
+        if not os.path.exists(reffile):
+            logger.error(f"❌ Reference file '{reffile}' does not exist!")
+            return False
+        logger.info("✅ BAM file validation passed")
+
+        logger.info("🚀 Starting mutation counting...")
+
         with tempfile.TemporaryDirectory(prefix="countmut_") as temp_dir:
             if tagging_enabled:
                 logger.info(
                     f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
                 )
-
-            # Validate input files exist
-            if not os.path.exists(samfile):
-                logger.error(f"❌ Input BAM file '{samfile}' does not exist!")
-                return False
-            if not os.path.exists(reffile):
-                logger.error(f"❌ Reference file '{reffile}' does not exist!")
-                return False
-
-            # Check and create BAM index if needed
-            bam_index = samfile + ".bai"
-            if not os.path.exists(bam_index):
-                logger.info(f"📇 BAM index not found. Creating index: {bam_index}")
-                try:
-                    pysam.index(samfile)
-                    logger.info("✅ BAM index created successfully")
-                except Exception as e:
-                    logger.error(f"❌ Failed to create BAM index: {e}")
-                    return False
-
-            # Check and create FASTA index if needed
-            fasta_index = reffile + ".fai"
-            if not os.path.exists(fasta_index):
-                logger.info(f"📇 FASTA index not found. Creating index: {fasta_index}")
-                try:
-                    pysam.faidx(reffile)
-                    logger.info("✅ FASTA index created successfully")
-                except Exception as e:
-                    logger.error(f"❌ Failed to create FASTA index: {e}")
-                    return False
-
-            # Set default threads
-            if threads is None:
-                threads = min(os.cpu_count() or 1, 8)
-
-            # Validate base parameters
-            valid_bases = {"A", "T", "G", "C"}
-            if ref_base not in valid_bases:
-                logger.error(
-                    f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
-                )
-                return False
-            if mut_base not in valid_bases:
-                logger.error(
-                    f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
-                )
-                return False
 
             logger.info("📖 Creating genomic bins...")
 
