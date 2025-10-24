@@ -331,6 +331,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
+        reads_with_no_valid_bases = 0 # New counter for reads that passed initial filters but contributed no valid bases
 
         # Initialize is_skipped and total_skipped_reads for the worker result
         is_skipped = False
@@ -528,6 +529,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             # After processing all positions for a read
             if read_contributes_to_counts:
                 processed_reads += 1
+            elif not read_contributes_to_counts: # If read didn't contribute valid bases
+                # This means it passed initial filters but all its bases were dropped.
+                reads_with_no_valid_bases += 1
 
             if outfile:
                 outfile.write(
@@ -572,12 +576,13 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         "insufficient_conversion_count"
                     ][query_base] += 1
 
-        # Calculate total skipped
+        # Calculate total skipped reads (including those with no valid bases)
         total_skipped_reads = (
             skipped_wrong_strand
             + skipped_unmapped_dup_secondary
             + skipped_missing_tags
             + skipped_no_sequence
+            + reads_with_no_valid_bases # Include reads that passed initial filters but had no valid bases
         )
         # A region is considered skipped if no reads were successfully processed through all filters
         if processed_reads == 0:
@@ -643,12 +648,13 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "reads": processed_reads,
             "total_reads": total_reads,  # Total reads for this region
             "skipped": is_skipped,  # Correctly reflect if the region was skipped
-            "skipped_reads": total_skipped_reads,  # Total reads skipped in this region
+            "skipped_reads": total_skipped_reads, # Total reads skipped in this region
             "skipped_wrong_strand": skipped_wrong_strand,
             "skipped_unmapped_dup_secondary": skipped_unmapped_dup_secondary,
             "skipped_missing_tags": skipped_missing_tags,
             "skipped_no_sequence": skipped_no_sequence,
-            "temp_bam_path": _WORKER_SHARD_PATH,  # Path to the temporary BAM file for this worker
+            "reads_with_no_valid_bases": reads_with_no_valid_bases, # New: Detailed skipped count
+            "temp_bam_path": _WORKER_SHARD_PATH, # Path to the temporary BAM file for this worker
             "timings": {
                 "total": time.time() - overall_start
             },  # Use the already constructed timings dictionary
@@ -950,6 +956,7 @@ def count_mutations(
             total_skipped_unmapped_dup_secondary_agg = 0
             total_skipped_missing_tags_agg = 0
             total_skipped_no_sequence_agg = 0
+            total_reads_with_no_valid_bases_agg = 0 # New: Accumulate reads with no valid bases
             all_results = []
             all_timings: list[dict[str, float]] = []
 
@@ -1051,6 +1058,7 @@ def count_mutations(
                             )
                             total_skipped_missing_tags_agg += result.get("skipped_missing_tags", 0)
                             total_skipped_no_sequence_agg += result.get("skipped_no_sequence", 0)
+                            total_reads_with_no_valid_bases_agg += result.get("reads_with_no_valid_bases", 0) # Accumulate new counter
 
                             if result.get("timings"):
                                 all_timings.append(result["timings"])
@@ -1100,8 +1108,8 @@ def count_mutations(
                     f"      Skipped details: wrong_strand={total_skipped_wrong_strand_agg}, "
                     f"unmapped/dup/secondary={total_skipped_unmapped_dup_secondary_agg}, "
                     f"missing_tags={total_skipped_missing_tags_agg}, "
-                    f"no_sequence={total_skipped_no_sequence_agg}"
-                )
+                    f"no_sequence={total_skipped_no_sequence_agg}, "
+                    f"no_valid_bases={total_reads_with_no_valid_bases_agg}") # Add new counter to display
             if total_skipped > 0:
                 logger.info(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
 
@@ -1115,6 +1123,11 @@ def count_mutations(
                 "total_reads_skipped": total_reads_skipped_all_workers,
                 "total_mutations_found": total_counts,
                 "elapsed_time": elapsed_time,
+                "total_skipped_wrong_strand_agg": total_skipped_wrong_strand_agg, # Add to return dict
+                "total_skipped_unmapped_dup_secondary_agg": total_skipped_unmapped_dup_secondary_agg, # Add to return dict
+                "total_skipped_missing_tags_agg": total_skipped_missing_tags_agg, # Add to return dict
+                "total_skipped_no_sequence_agg": total_skipped_no_sequence_agg, # Add to return dict
+                "total_reads_with_no_valid_bases_agg": total_reads_with_no_valid_bases_agg, # Add to return dict
             }
 
     except Exception as e:
