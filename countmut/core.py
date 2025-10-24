@@ -331,7 +331,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
-        reads_with_all_bases_dropped = 0 # New counter for reads that pass initial filters but all bases are dropped
 
         # Initialize is_skipped and total_skipped_reads for the worker result
         is_skipped = False
@@ -353,7 +352,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         for read in reads_to_process:
             total_reads += 1
             read_contributes_to_counts = False # Flag to track if read contributed any valid base
-            read_has_dropped_bases = False # Flag to track if read had any bases dropped due to filters
             try:
                 actual_strand = determine_actual_strand(read)
                 # If tagging is enabled, count alternative mutations and update tags
@@ -445,13 +443,10 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 # Iterate via reference positions (fast path) and filter
                 for query_pos, ref_pos in read.get_aligned_pairs(matches_only=True):
                     if query_pos is None or ref_pos is None:
-                        read_has_dropped_bases = True # Count as dropped if alignment is funky
                         continue
                     if ref_pos not in target_sites_set:
-                        read_has_dropped_bases = True # Count as dropped if not target site
                         continue
                     if query_pos >= len(query_sequence):
-                        read_has_dropped_bases = True # Count as dropped if query_pos out of bounds
                         continue
 
                     # Check if position is internal (not in trimmed regions)
@@ -468,7 +463,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         )
 
                     if not is_internal:
-                        read_has_dropped_bases = True # Count as dropped if trimmed
+                        continue
 
                     query_base = query_sequence[query_pos].upper()
                     base_qual = (
@@ -480,7 +475,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     # Check base quality
                     passes_baseq_filter = base_qual >= min_baseq
                     if not passes_baseq_filter:
-                        read_has_dropped_bases = True # Count as dropped if low base quality
+                        continue
 
                     if actual_strand == "-":
                         query_base = query_base.translate(DNA_COMPLEMENT)
@@ -506,7 +501,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                 False, # passes_baseq_filter (false if dropped)
                                 passes_conversion_filter,
                             )
-                        read_has_dropped_bases = True # Mark read as having dropped bases
                         continue # Skip further processing for this base as it's low quality
 
                     # If all quality filters pass, proceed to store the best observation
@@ -534,9 +528,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             # After processing all positions for a read
             if read_contributes_to_counts:
                 processed_reads += 1
-            elif not read_contributes_to_counts and read_has_dropped_bases:
-                # If a read didn't contribute to counts but had dropped bases, it means all its bases were dropped.
-                reads_with_all_bases_dropped += 1
 
             if outfile:
                 outfile.write(
@@ -587,7 +578,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             + skipped_unmapped_dup_secondary
             + skipped_missing_tags
             + skipped_no_sequence
-            + reads_with_all_bases_dropped # Include reads where all bases were dropped
         )
         # A region is considered skipped if no reads were successfully processed through all filters
         if processed_reads == 0:
