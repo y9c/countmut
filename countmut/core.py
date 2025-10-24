@@ -708,7 +708,7 @@ def count_mutations(
 
     # Configure logging level based on verbose flag
     if verbose:
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG)  # Changed to DEBUG
     else:
         logger.setLevel(logging.WARNING)
 
