@@ -337,8 +337,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         total_skipped_reads = 0
 
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
-        # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
-        best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
+        # Value: (strand, base, qual, is_internal, is_mapped, is_converted, is_baseq_passing, is_conversion_passing)
+        best_obs: dict[
+            tuple[int, str],
+            tuple[str, str, int, bool, bool, bool, bool, bool],
+        ] = {}
 
         reads_to_process = samfile.fetch(region_chrom, region_start, region_end)
         if outfile:
@@ -348,6 +351,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
         for read in reads_to_process:
             total_reads += 1
+            read_contributes_to_counts = False # Flag to track if read contributed any valid base
+            read_has_dropped_bases = False # Flag to track if read had any bases dropped due to filters
             try:
                 actual_strand = determine_actual_strand(read)
                 # If tagging is enabled, count alternative mutations and update tags
@@ -436,36 +441,34 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     continue
                 query_qualities = read.query_qualities or []
 
-                # Mark this read as successfully processed
-                processed_reads += 1
-
                 # Iterate via reference positions (fast path) and filter
                 for query_pos, ref_pos in read.get_aligned_pairs(matches_only=True):
-                    # matches_only=True: only aligned positions (no insertions/deletions with None)
                     if query_pos is None or ref_pos is None:
+                        read_has_dropped_bases = True # Count as dropped if alignment is funky
                         continue
                     if ref_pos not in target_sites_set:
+                        read_has_dropped_bases = True # Count as dropped if not target site
                         continue
                     if query_pos >= len(query_sequence):
+                        read_has_dropped_bases = True # Count as dropped if query_pos out of bounds
                         continue
 
                     # Check if position is internal (not in trimmed regions)
                     # Trim based on actual strand orientation (fragment 5' to 3')
-                    # For forward strand (+): 5' is at start (low query_pos), 3' is at end (high query_pos)
-                    # For reverse strand (-): 5' is at end (high query_pos), 3' is at start (low query_pos)
                     if actual_strand == "+":
-                        # Forward: trim_start from 5' (beginning), trim_end from 3' (end)
                         is_internal = (
                             query_pos >= trim_start
                             and len(query_sequence) - query_pos > trim_end
                         )
                     else:
-                        # Reverse: trim_start from 5' (end), trim_end from 3' (beginning)
                         is_internal = (
                             query_pos >= trim_end
                             and len(query_sequence) - query_pos > trim_start
                         )
-                    # Get query base from read sequence (base_char is reference base, not query)
+
+                    if not is_internal:
+                        read_has_dropped_bases = True # Count as dropped if trimmed
+
                     query_base = query_sequence[query_pos].upper()
                     base_qual = (
                         int(query_qualities[query_pos])
@@ -475,11 +478,37 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
 
                     # Check base quality
                     passes_baseq_filter = base_qual >= min_baseq
+                    if not passes_baseq_filter:
+                        read_has_dropped_bases = True # Count as dropped if low base quality
 
                     if actual_strand == "-":
                         query_base = query_base.translate(DNA_COMPLEMENT)
                     key = (ref_pos, read.query_name)
                     prev = best_obs.get(key)
+
+                    # If any of the filters fail, this base is considered dropped (low_quality)
+                    if not (
+                        is_internal
+                        and passes_mismatch_filter
+                        and passes_mapq_filter
+                        and passes_baseq_filter
+                    ):
+                        # Even if dropped, we still keep the best observation to correctly populate low_quality_count
+                        if (prev is None) or (base_qual > prev[2]):
+                            best_obs[key] = (
+                                actual_strand,
+                                query_base,
+                                base_qual,
+                                False, # is_internal (false if dropped)
+                                False, # passes_mismatch_filter (false if dropped)
+                                False, # passes_mapq_filter (false if dropped)
+                                False, # passes_baseq_filter (false if dropped)
+                                passes_conversion_filter,
+                            )
+                        read_has_dropped_bases = True # Mark read as having dropped bases
+                        continue # Skip further processing for this base as it's low quality
+
+                    # If all quality filters pass, proceed to store the best observation
                     if (prev is None) or (base_qual > prev[2]):
                         best_obs[key] = (
                             actual_strand,
@@ -492,12 +521,21 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             bool(passes_conversion_filter),
                         )
 
+                    read_contributes_to_counts = True # Mark read as contributing valid bases
+
             except (KeyError, AttributeError) as e:
                 # Skip reads with missing tags or invalid data
                 logger.debug(f"Skipping read due to missing tag: {e}")
                 if outfile:
                     outfile.write(read)  # Write unmodified read on error
                 continue
+
+            # After processing all positions for a read, update processed_reads and total_skipped_reads
+            if read_contributes_to_counts:
+                processed_reads += 1
+            elif read_has_dropped_bases:
+                # If a read didn't contribute to counts but had dropped bases, count it as skipped
+                total_skipped_reads += 1
 
             if outfile:
                 outfile.write(

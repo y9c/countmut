@@ -355,8 +355,6 @@ def main(
         )
         console.print(config_panel)
 
-        console.print("🚀 Starting mutation counting...")
-
         stats = count_mutations(
             samfile=input_bam_abs,  # Added samfile keyword argument
             reffile=reference_fasta_abs,  # Added reffile keyword argument
