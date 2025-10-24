@@ -896,8 +896,13 @@ def count_mutations(
             # Initialize counters and result lists
             total_processed = 0
             total_counts = 0
-            total_skipped = 0
-            total_reads = 0
+            total_skipped = 0  # Regions skipped (no reads)
+            total_reads_processed_all_workers = (
+                0  # Accumulate processed reads from all workers
+            )
+            total_reads_skipped_all_workers = (
+                0  # Accumulate skipped reads from all workers
+            )
             all_results = []
             all_timings: list[dict[str, float]] = []
 
@@ -932,21 +937,23 @@ def count_mutations(
                     future.result()  # Wait for each worker to initialize
                 logger.info("✅ Workers warmed up. Submitting main tasks...")
 
-                with Progress(
-                    "[progress.description]{task.description}",
-                    "[progress.percentage]{task.percentage:>3.0f}%",
-                    "[cyan]{task.completed}/{task.total} regions",
-                    "[green]{task.fields[counts]:,} mutations",
-                    "[magenta]{task.fields[reads]:,} reads",
-                    TimeElapsedColumn(),
-                    TimeRemainingColumn(),
-                    expand=False,
-                ) as progress:
+                with (
+                    Progress(
+                        "[progress.description]{task.description}",
+                        "[progress.percentage]{task.percentage:>3.0f}%",
+                        "[cyan]{task.completed}/{task.total} regions",
+                        "[green]{task.fields[counts]:,} mutations",
+                        "[magenta]{task.fields[reads]:,} reads",  # Changed to 'reads' for clarity
+                        TimeElapsedColumn(),
+                        TimeRemainingColumn(),
+                        expand=False,
+                    ) as progress
+                ):
                     task = progress.add_task(
                         "🔄 Processing regions...",
                         total=len(worker_args),
                         counts=0,
-                        reads=0,
+                        reads=0,  # Initial value for reads
                     )
 
                     # Submit all tasks at once for maximum parallelism
@@ -961,22 +968,24 @@ def count_mutations(
                         total_processed += 1
 
                         if result["success"]:
-                            # Check if region was skipped
                             if result.get("skipped", False):
-                                total_skipped += 1
+                                total_skipped += 1  # Count of regions skipped
                             else:
                                 total_counts += len(result["counts"])
-                            # Accumulate reads and timing
-                            total_reads += result.get("reads", 0)
+
+                            # Accumulate processed and skipped reads from worker results
+                            total_reads_processed_all_workers += result.get("reads", 0)
+                            total_reads_skipped_all_workers += result.get(
+                                "skipped_reads", 0
+                            )
+
                             if result.get("timings"):
                                 all_timings.append(result["timings"])
 
                             # Stream results immediately if outputting to stdout
                             if output_file is None and result["counts"]:
                                 for row in result["counts"]:
-                                    sys.stdout.write(
-                                        "\t".join(map(str, row)) + "\n"
-                                    )  # Use sys.stdout.write for raw output
+                                    sys.stdout.write("\t".join(map(str, row)) + "\n")
                                     sys.stdout.flush()
                             else:
                                 # Collect for file output
@@ -987,9 +996,12 @@ def count_mutations(
                                 f"Failed to process region {result['region']}: {result['error']}"
                             )
 
-                        # Update progress
+                        # Update progress with total mutations and reads processed
                         progress.update(
-                            task, advance=1, counts=total_counts, reads=total_reads
+                            task,
+                            advance=1,
+                            counts=total_counts,
+                            reads=total_reads_processed_all_workers,
                         )
 
                     # Explicitly shut down the executor after all results are collected
@@ -1015,6 +1027,12 @@ def count_mutations(
             logger.info("✅ Processing completed!")
             logger.info(f"   Regions processed: {total_processed}")
             logger.info(f"   Regions skipped (no reads): {total_skipped}")
+            logger.info(
+                f"   Total reads processed: {total_reads_processed_all_workers}"
+            )  # New summary stat
+            logger.info(
+                f"   Total reads skipped: {total_reads_skipped_all_workers}"
+            )  # New summary stat
             logger.info(f"   Total mutations found: {total_counts}")
             logger.info(f"   Time elapsed: {elapsed_time:.2f}s")
             logger.info(
