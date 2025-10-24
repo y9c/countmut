@@ -399,7 +399,6 @@ def main(
             stats_table.add_row(
                 "Total mutations found:", f"{stats['total_mutations_found']:,}"
             )
-            stats_table.add_row("Time elapsed:", f"{stats['elapsed_time']:.2f}s")
 
             if stats["total_reads_skipped"] > 0:
                 # Display detailed skipped reads only if there were skipped reads
