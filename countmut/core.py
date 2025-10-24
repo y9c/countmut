@@ -327,7 +327,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         # Process all reads in the region
         total_reads = 0
         skipped_wrong_strand = 0
-        skipped_unmapped_dup_secondary = 0
+        skipped_unmapped = 0 # New: skipped due to unmapped
+        skipped_duplicate = 0 # New: skipped due to duplicate
+        skipped_secondary = 0 # New: skipped due to secondary
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
@@ -404,11 +406,21 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         outfile.write(read)  # Write unmodified read on error
                     continue
 
-                # Skip reads with deletions or reference skips
-                if read.is_unmapped or read.is_duplicate or read.is_secondary:
-                    skipped_unmapped_dup_secondary += 1
+                # Skip reads that are unmapped, duplicate, or secondary
+                if read.is_unmapped:
+                    skipped_unmapped += 1
                     if outfile:
-                        outfile.write(read)  # Write unmodified read on error
+                        outfile.write(read)
+                    continue
+                if read.is_duplicate:
+                    skipped_duplicate += 1
+                    if outfile:
+                        outfile.write(read)
+                    continue
+                if read.is_secondary:
+                    skipped_secondary += 1
+                    if outfile:
+                        outfile.write(read)
                     continue
 
                 # Get read properties (avoid exceptions on missing tags)
@@ -581,7 +593,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         # Calculate total skipped reads (including those with no valid bases)
         total_skipped_reads = (
             skipped_wrong_strand
-            + skipped_unmapped_dup_secondary
+            + skipped_unmapped
+            + skipped_duplicate
+            + skipped_secondary
             + skipped_missing_tags
             + skipped_no_sequence
             # Removed: + reads_with_no_valid_bases # Include reads that passed initial filters but had no valid bases
@@ -652,7 +666,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "skipped": is_skipped,  # Correctly reflect if the region was skipped
             "skipped_reads": total_skipped_reads, # Total reads skipped in this region
             "skipped_wrong_strand": skipped_wrong_strand,
-            "skipped_unmapped_dup_secondary": skipped_unmapped_dup_secondary,
+            "skipped_unmapped": skipped_unmapped, # New: individual skipped count
+            "skipped_duplicate": skipped_duplicate, # New: individual skipped count
+            "skipped_secondary": skipped_secondary, # New: individual skipped count
             "skipped_missing_tags": skipped_missing_tags,
             "skipped_no_sequence": skipped_no_sequence,
             # Removed: "reads_with_no_valid_bases": reads_with_no_valid_bases, # New: Detailed skipped count
@@ -955,7 +971,9 @@ def count_mutations(
             )
             # Detailed skipped read counts across all workers
             total_skipped_wrong_strand_agg = 0
-            total_skipped_unmapped_dup_secondary_agg = 0
+            total_skipped_unmapped_agg = 0 # New: Aggregated unmapped reads
+            total_skipped_duplicate_agg = 0 # New: Aggregated duplicate reads
+            total_skipped_secondary_agg = 0 # New: Aggregated secondary reads
             total_skipped_missing_tags_agg = 0
             total_skipped_no_sequence_agg = 0
             # Removed: total_reads_with_no_valid_bases_agg = 0 # Accumulator no longer needed
@@ -1055,9 +1073,9 @@ def count_mutations(
 
                             # Accumulate detailed skipped read counts
                             total_skipped_wrong_strand_agg += result.get("skipped_wrong_strand", 0)
-                            total_skipped_unmapped_dup_secondary_agg += result.get(
-                                "skipped_unmapped_dup_secondary", 0
-                            )
+                            total_skipped_unmapped_agg += result.get("skipped_unmapped", 0) # New: Accumulate unmapped
+                            total_skipped_duplicate_agg += result.get("skipped_duplicate", 0) # New: Accumulate duplicate
+                            total_skipped_secondary_agg += result.get("skipped_secondary", 0) # New: Accumulate secondary
                             total_skipped_missing_tags_agg += result.get("skipped_missing_tags", 0)
                             total_skipped_no_sequence_agg += result.get("skipped_no_sequence", 0)
                             # Removed: total_reads_with_no_valid_bases_agg += result.get("reads_with_no_valid_bases", 0) # Accumulate new counter
@@ -1091,9 +1109,9 @@ def count_mutations(
                     executor.shutdown(wait=True)
 
                 logger.info(
-                    f"📊 Processed {total_processed} regions, {total_counts:,} mutations, "
+                    f"📊 Processed {total_processed} regions, {total_counts:,} sites, "
                     f"{total_reads_processed_all_workers:,} reads."
-                ) # New intermediate summary log
+                )
 
             # Write results to file if specified
             if output_file:
@@ -1122,7 +1140,9 @@ def count_mutations(
                 "total_mutations_found": total_counts,
                 "elapsed_time": elapsed_time,
                 "total_skipped_wrong_strand_agg": total_skipped_wrong_strand_agg,
-                "total_skipped_unmapped_dup_secondary_agg": total_skipped_unmapped_dup_secondary_agg,
+                "total_skipped_unmapped_agg": total_skipped_unmapped_agg, # New: return aggregated unmapped
+                "total_skipped_duplicate_agg": total_skipped_duplicate_agg, # New: return aggregated duplicate
+                "total_skipped_secondary_agg": total_skipped_secondary_agg, # New: return aggregated secondary
                 "total_skipped_missing_tags_agg": total_skipped_missing_tags_agg,
                 "total_skipped_no_sequence_agg": total_skipped_no_sequence_agg,
                 # Removed: "total_reads_with_no_valid_bases_agg": total_reads_with_no_valid_bases_agg, # Add to return dict

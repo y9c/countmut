@@ -405,26 +405,16 @@ def main(
                 "Total mutations found:", f"{stats['total_mutations_found']:,}"
             )
 
-            if stats["total_reads_skipped"] > 0:
+            if stats['total_reads_skipped'] > 0:
                 # Display detailed skipped reads only if there were skipped reads
                 stats_table.add_section()
                 stats_table.add_row("Skipped details:", "")
-                stats_table.add_row(
-                    "  Wrong strand:",
-                    f"{stats.get('total_skipped_wrong_strand_agg', 0):,}",
-                )
-                stats_table.add_row(
-                    "  Unmapped/Dup/Secondary:",
-                    f"{stats.get('total_skipped_unmapped_dup_secondary_agg', 0):,}",
-                )
-                stats_table.add_row(
-                    "  Missing tags:",
-                    f"{stats.get('total_skipped_missing_tags_agg', 0):,}",
-                )
-                stats_table.add_row(
-                    "  No sequence:",
-                    f"{stats.get('total_skipped_no_sequence_agg', 0):,}",
-                )
+                stats_table.add_row("  Wrong strand:", f"{stats.get('total_skipped_wrong_strand_agg', 0):,}")
+                stats_table.add_row("  Unmapped:", f"{stats.get('total_skipped_unmapped_agg', 0):,}") # New: Display unmapped
+                stats_table.add_row("  Duplicate:", f"{stats.get('total_skipped_duplicate_agg', 0):,}") # New: Display duplicate
+                stats_table.add_row("  Secondary:", f"{stats.get('total_skipped_secondary_agg', 0):,}") # New: Display secondary
+                stats_table.add_row("  Missing tags:", f"{stats.get('total_skipped_missing_tags_agg', 0):,}")
+                stats_table.add_row("  No sequence:", f"{stats.get('total_skipped_no_sequence_agg', 0):,}")
 
             final_panel = Panel(
                 stats_table,
