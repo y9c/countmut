@@ -30,7 +30,7 @@ from .utils import get_output_headers, write_output
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(message)s", datefmt="%H:%M:%S")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
