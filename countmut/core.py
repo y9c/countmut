@@ -528,7 +528,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                 False, # passes_mismatch_filter (no longer applicable here)
                                 False, # passes_mapq_filter (no longer applicable here)
                                 False, # passes_baseq_filter (false if dropped)
-                                False, # passes_conversion_filter (no longer applicable here)
+                                False, # passes_conversion_filter (false if dropped at base level)
                             )
                         continue # Skip further processing for this base as it's low quality
 
@@ -542,7 +542,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                             True, # passes_mismatch_filter (always true at this point)
                             True, # passes_mapq_filter (always true at this point)
                             bool(passes_baseq_filter),
-                            True, # passes_conversion_filter (always true at this point)
+                            True, # passes_conversion_filter (always true at this point, since read-level filter passed)
                         )
                     # Removed: read_contributes_to_counts = True # Flag no longer needed
 
@@ -570,11 +570,11 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             strand_symbol,
             query_base,
             _q,
-            is_internal,
-            passes_mismatch_filter,
-            passes_mapq_filter,
-            passes_baseq_filter,
-            passes_conversion_filter,
+            is_internal, # Keep this, used below
+            _passes_mismatch_filter, # No longer used, replace with _
+            _passes_mapq_filter, # No longer used, replace with _
+            passes_baseq_filter, # Keep this, used below
+            passes_conversion_filter, # Keep this, used below for counting
         ) in best_obs.items():
             # Skip positions that are not in our target sites (safety)
             if ref_pos not in position_data:
@@ -588,7 +588,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 position_data[ref_pos][strand_symbol]["low_quality_count"][
                     query_base
                 ] += 1
-            # Count in high_conversion/insufficient_conversion only if ALL quality filters pass
+            # Count in high_conversion/insufficient_conversion only if ALL base-level quality filters pass
             else:
                 if passes_conversion_filter:
                     # High conversion efficiency (pass quality + conversion filters)
