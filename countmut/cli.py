@@ -14,6 +14,7 @@ Version: 0.0.2
 import os
 from importlib import metadata as importlib_metadata
 
+import rich.box  # Corrected import
 import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
@@ -346,31 +347,92 @@ def main(
         )
     )
 
-    # Call the core counting function
-    count_mutations(
-        samfile=input_bam_abs,
-        reffile=reference_fasta_abs,
-        output_file=output_file_abs,
-        output_bam=output_bam_abs,
-        ref_base=ref_base,
-        mut_base=mut_base,
-        ref_base2=ref_base2,
-        mut_base2=mut_base2,
-        bin_size=bin_size,
-        threads=threads,
-        save_rest=save_rest,
-        region=region,
-        strand=strand,
-        pad=pad,
-        trim_start=trim_start,
-        trim_end=trim_end,
-        max_unc=max_unc,
-        min_con=min_con,
-        max_sub=max_sub,
-        min_baseq=min_baseq,
-        min_mapq=min_mapq,
-        verbose=verbose,
-    )
+    try:
+        console.print("🚀 Starting mutation counting...")
+
+        stats = count_mutations(
+            samfile=input_bam_abs,  # Added samfile keyword argument
+            reffile=reference_fasta_abs,  # Added reffile keyword argument
+            output_file=output_file_abs,
+            output_bam=output_bam_abs,
+            ref_base=ref_base,
+            mut_base=mut_base,
+            ref_base2=ref_base2,
+            mut_base2=mut_base2,
+            bin_size=bin_size,
+            threads=threads,
+            save_rest=save_rest,
+            region=region,
+            force=force,  # Added force keyword argument
+            strand=strand,
+            pad=pad,
+            trim_start=trim_start,
+            trim_end=trim_end,
+            max_unc=max_unc,
+            min_con=min_con,
+            max_sub=max_sub,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            verbose=verbose,
+        )
+
+        # Display final statistics in a rich panel
+        if stats:
+            stats_table = Table(
+                box=rich.box.MINIMAL, show_header=False
+            )  # Updated to use rich.box.MINIMAL
+            stats_table.add_column("Metric", style="bold")
+            stats_table.add_column("Value", style="cyan")
+            stats_table.add_row(
+                "Regions processed:", f"{stats['total_processed_regions']:,}"
+            )
+            stats_table.add_row(
+                "Regions skipped (no reads):", f"{stats['total_skipped_regions']:,}"
+            )
+            stats_table.add_row("Total raw reads:", f"{stats['total_raw_reads']:,}")
+            stats_table.add_row(
+                "Total reads processed:", f"{stats['total_reads_processed']:,}"
+            )
+            stats_table.add_row(
+                "Total reads skipped:", f"{stats['total_reads_skipped']:,}"
+            )
+            stats_table.add_row(
+                "Total mutations found:", f"{stats['total_mutations_found']:,}"
+            )
+            stats_table.add_row("Time elapsed:", f"{stats['elapsed_time']:.2f}s")
+
+            if stats["total_reads_skipped"] > 0:
+                # Display detailed skipped reads only if there were skipped reads
+                stats_table.add_section()
+                stats_table.add_row("Skipped details:", "")
+                stats_table.add_row(
+                    "  Wrong strand:",
+                    f"{stats.get('total_skipped_wrong_strand_agg', 0):,}",
+                )
+                stats_table.add_row(
+                    "  Unmapped/Dup/Secondary:",
+                    f"{stats.get('total_skipped_unmapped_dup_secondary_agg', 0):,}",
+                )
+                stats_table.add_row(
+                    "  Missing tags:",
+                    f"{stats.get('total_skipped_missing_tags_agg', 0):,}",
+                )
+                stats_table.add_row(
+                    "  No sequence:",
+                    f"{stats.get('total_skipped_no_sequence_agg', 0):,}",
+                )
+
+            final_panel = Panel(
+                stats_table,
+                title="[bold green]Processing Summary[/bold green]",
+                border_style="green",
+                expand=False,
+            )
+            console.print(final_panel)
+
+    except Exception as e:
+        console.print(f"[red]Error during mutation counting: {e}[/red]")
+        console.print("[red]Please check the logs for more details.[/red]")
 
 
 if __name__ == "__main__":

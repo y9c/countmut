@@ -96,8 +96,11 @@ class TestCLI:
                 ],
             )
 
+            # Assert that the command succeeded and the output file was created
             assert result.exit_code == 0
             assert output_file.exists()
+            assert "Processing Summary" in result.output  # Updated assertion
+            assert "Total mutations found:" in result.output
 
     @pytest.mark.skipif(
         not Path("/home/yec/Desktop/test_rRNA.bam").exists(),
@@ -133,8 +136,11 @@ class TestCLI:
                 ],
             )
 
+            # Assert that the command succeeded and the output file was created
             assert result.exit_code == 0
             assert output_file.exists()
+            assert "Processing Summary" in result.output  # Updated assertion
+            assert "Total mutations found:" in result.output
 
     @pytest.mark.skipif(
         not Path("/home/yec/Desktop/test_rRNA.bam").exists(),

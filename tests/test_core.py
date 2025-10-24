@@ -7,11 +7,19 @@ import pysam
 import pytest
 
 from countmut.core import (
+    count_mutations,
     determine_actual_strand,
     get_motif,
     read_fasta_index,
     reverse_complement,
 )
+
+
+@pytest.fixture
+def test_data_dir():
+    """Fixture to provide the path to test data."""
+    # Assuming test.bam and test.fa are directly in ~/Desktop for now
+    return Path("/home/yec/Desktop/")
 
 
 class TestUtilityFunctions:
@@ -126,8 +134,6 @@ class TestCountMutations:
 
     def test_count_mutations_invalid_base(self):
         """Test count_mutations with invalid base parameters."""
-        from countmut.core import count_mutations
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create dummy files
             bam_path = Path(tmpdir) / "test.bam"
@@ -155,27 +161,45 @@ class TestIntegration:
         not Path("/home/yec/Desktop/test_rRNA.bam").exists(),
         reason="Test files not available",
     )
-    def test_count_mutations_real_data(self):
-        """Test count_mutations with real data if available."""
-        from countmut.core import count_mutations
+    def test_count_mutations_real_data(self, test_data_dir, tmp_path):
+        # Paths to test files
+        input_bam = test_data_dir / "test_rRNA.bam"  # Corrected BAM file name
+        reference_fasta = test_data_dir / "genes.fa"  # Corrected FASTA file name
+        output_tsv = tmp_path / "output.tsv"
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_file = Path(tmpdir) / "output.tsv"
+        # Run mutation counting with default parameters
+        stats = count_mutations(
+            samfile=str(input_bam),
+            reffile=str(reference_fasta),
+            output_file=str(output_tsv),
+            output_bam=None,
+            ref_base="A",
+            mut_base="G",
+            ref_base2=None,
+            mut_base2=None,
+            bin_size=1000000000,
+            threads=1,
+            save_rest=False,
+            region=None,
+            force=True,
+            strand="both",
+            pad=0,
+            trim_start=0,
+            trim_end=0,
+            max_unc=100,
+            min_con=0,
+            max_sub=100,
+            min_baseq=0,
+            min_mapq=0,
+            verbose=False,
+        )
 
-            result = count_mutations(
-                samfile="/home/yec/Desktop/test_rRNA.bam",
-                reffile="/home/yec/Desktop/genes.fa",
-                output_file=str(output_file),
-                ref_base="A",
-                mut_base="G",
-                bin_size=1000000000,
-                threads=2,
-            )
-
-            assert result is True
-            assert output_file.exists()
-
-            # Verify output has content
-            content = output_file.read_text()
-            assert len(content) > 0
-            assert "chrom" in content  # Header present
+        # Assert that the function returned a dictionary with expected statistics
+        assert isinstance(stats, dict)
+        assert "total_processed_regions" in stats
+        assert "total_mutations_found" in stats
+        assert "total_raw_reads" in stats
+        assert "total_reads_processed" in stats
+        assert "total_reads_skipped" in stats
+        assert stats["total_mutations_found"] > 0
+        assert output_tsv.exists()

@@ -665,6 +665,7 @@ def count_mutations(
     threads: int | None = None,
     save_rest: bool = False,
     region: str | None = None,
+    force: bool = False,  # Re-added force parameter
     strand: str = "both",
     pad: int = 15,
     trim_start: int = 2,
@@ -1065,21 +1066,20 @@ def count_mutations(
                     f"no_sequence={total_skipped_no_sequence_agg}"
                 )
             logger.info(f"   Total mutations found: {total_counts}")
-            logger.info(
-                f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec"
-            )
-            if total_skipped > 0:
-                logger.info(
-                    f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!"
-                )
-            if all_timings:
-                # Calculate average total time
-                total_time = sum(t.get("total", 0) for t in all_timings)
-                n = len(all_timings)
-                avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
-                logger.info(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
+            # Removed: logger.info(f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec")
+            # Removed: logger.info(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
+            # Removed: logger.info(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
 
-            return True
+            # Return key statistics for CLI to display in a final panel
+            return {
+                "total_processed_regions": total_processed,
+                "total_skipped_regions": total_skipped,
+                "total_raw_reads": total_raw_reads_all_workers,
+                "total_reads_processed": total_reads_processed_all_workers,
+                "total_reads_skipped": total_reads_skipped_all_workers,
+                "total_mutations_found": total_counts,
+                "elapsed_time": elapsed_time,
+            }
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
