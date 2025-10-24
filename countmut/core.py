@@ -300,7 +300,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             total_reads += 1
             try:
                 actual_strand = determine_actual_strand(read)
-
                 # If tagging is enabled, count alternative mutations and update tags
                 if ref_base2 and mut_base2:
                     alt_ref_count = 0
@@ -979,7 +978,7 @@ def count_mutations(
                 avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
                 print(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
 
-            return True
+        return True
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
