@@ -12,7 +12,6 @@ Date: 2025-10-23
 import atexit
 import logging
 import os
-import shutil
 import tempfile
 import time
 from collections import Counter
@@ -641,319 +640,330 @@ def count_mutations(
 
     # Handle alternative mutation tagging
     tagging_enabled = ref_base2 and mut_base2
-    temp_dir = None
     if tagging_enabled:
         ref_base2 = ref_base2.upper()
         mut_base2 = mut_base2.upper()
-        temp_dir = tempfile.mkdtemp()
-        print(
-            f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
-        )
-
-    # Validate input files exist
-    if not os.path.exists(samfile):
-        print(f"❌ Input BAM file '{samfile}' does not exist!")
-        return False
-    if not os.path.exists(reffile):
-        print(f"❌ Reference file '{reffile}' does not exist!")
-        return False
-
-    # Check and create BAM index if needed
-    bam_index = samfile + ".bai"
-    if not os.path.exists(bam_index):
-        print(f"📇 BAM index not found. Creating index: {bam_index}")
-        try:
-            pysam.index(samfile)
-            print("✅ BAM index created successfully")
-        except Exception as e:
-            print(f"❌ Failed to create BAM index: {e}")
-            return False
-
-    # Check and create FASTA index if needed
-    fasta_index = reffile + ".fai"
-    if not os.path.exists(fasta_index):
-        print(f"📇 FASTA index not found. Creating index: {fasta_index}")
-        try:
-            pysam.faidx(reffile)
-            print("✅ FASTA index created successfully")
-        except Exception as e:
-            print(f"❌ Failed to create FASTA index: {e}")
-            return False
-
-    # Set default threads
-    if threads is None:
-        threads = min(os.cpu_count() or 1, 8)
-
-    # Validate base parameters
-    valid_bases = {"A", "T", "G", "C"}
-    if ref_base not in valid_bases:
-        print(
-            f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
-        )
-        return False
-    if mut_base not in valid_bases:
-        print(
-            f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
-        )
-        return False
 
     try:
-        print("📖 Creating genomic bins...")
-
-        # Read FASTA index file directly (much faster than opening full FASTA)
-        ref_chrom_lengths = read_fasta_index(reffile)
-
-        # Get BAM header
-        samfile_open = pysam.AlignmentFile(samfile, "rb")
-        bam_chroms = list(samfile_open.references)
-        samfile_open.close()
-
-        print(
-            f"🔍 Filtering chromosomes: {len(bam_chroms)} in BAM, {len(ref_chrom_lengths)} in reference"
-        )
-
-        bin_list = []
-
-        if region:
-            # Parse region specification
-            if ":" in region and "-" in region:
-                chrom, pos_range = region.split(":")
-                start, end = map(int, pos_range.split("-"))
-                # Check if chromosome exists in BAM
-                if chrom not in bam_chroms:
-                    print(f"❌ Chromosome '{chrom}' not found in BAM file!")
-                    print(f"Available chromosomes: {', '.join(sorted(bam_chroms))}")
-                    return False
-                # Convert from 1-based to 0-based coordinates for pysam
-                bin_list = [(chrom, start - 1, end)]
-            else:
-                print(f"❌ Invalid region format: {region}. Use 'chr1:1000000-2000000'")
-                return False
-        else:
-            # Process only chromosomes present in BAM; query lengths from reference
-            valid_chroms = []
-            missing_in_ref = []
-            for chrom in bam_chroms:
-                if chrom not in ref_chrom_lengths:
-                    missing_in_ref.append(chrom)
-                    continue
-                chrom_length = ref_chrom_lengths[chrom]
-                valid_chroms.append(chrom)
-                bin_start = 0
-                while bin_start < chrom_length:
-                    bin_end = min(bin_start + bin_size, chrom_length)
-                    bin_list.append((chrom, bin_start, bin_end))
-                    bin_start += bin_size
-
-            if missing_in_ref:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if tagging_enabled:
                 print(
-                    f"⚠️  {len(missing_in_ref)} BAM chromosomes not found in reference"
+                    f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
                 )
-                if len(missing_in_ref) <= 10:
-                    print(f"   Missing: {', '.join(missing_in_ref)}")
+
+            # Validate input files exist
+            if not os.path.exists(samfile):
+                print(f"❌ Input BAM file '{samfile}' does not exist!")
+                return False
+            if not os.path.exists(reffile):
+                print(f"❌ Reference file '{reffile}' does not exist!")
+                return False
+
+            # Check and create BAM index if needed
+            bam_index = samfile + ".bai"
+            if not os.path.exists(bam_index):
+                print(f"📇 BAM index not found. Creating index: {bam_index}")
+                try:
+                    pysam.index(samfile)
+                    print("✅ BAM index created successfully")
+                except Exception as e:
+                    print(f"❌ Failed to create BAM index: {e}")
+                    return False
+
+            # Check and create FASTA index if needed
+            fasta_index = reffile + ".fai"
+            if not os.path.exists(fasta_index):
+                print(f"📇 FASTA index not found. Creating index: {fasta_index}")
+                try:
+                    pysam.faidx(reffile)
+                    print("✅ FASTA index created successfully")
+                except Exception as e:
+                    print(f"❌ Failed to create FASTA index: {e}")
+                    return False
+
+            # Set default threads
+            if threads is None:
+                threads = min(os.cpu_count() or 1, 8)
+
+            # Validate base parameters
+            valid_bases = {"A", "T", "G", "C"}
+            if ref_base not in valid_bases:
+                print(
+                    f"❌ Invalid reference base '{ref_base}'. Must be one of: {', '.join(valid_bases)}"
+                )
+                return False
+            if mut_base not in valid_bases:
+                print(
+                    f"❌ Invalid mutation base '{mut_base}'. Must be one of: {', '.join(valid_bases)}"
+                )
+                return False
+
+            print("📖 Creating genomic bins...")
+
+            # Read FASTA index file directly (much faster than opening full FASTA)
+            ref_chrom_lengths = read_fasta_index(reffile)
+
+            # Get BAM header
+            samfile_open = pysam.AlignmentFile(samfile, "rb")
+            bam_chroms = list(samfile_open.references)
+            samfile_open.close()
+
+            print(
+                f"🔍 Filtering chromosomes: {len(bam_chroms)} in BAM, {len(ref_chrom_lengths)} in reference"
+            )
+
+            bin_list = []
+
+            if region:
+                # Parse region specification
+                if ":" in region and "-" in region:
+                    chrom, pos_range = region.split(":")
+                    start, end = map(int, pos_range.split("-"))
+                    # Check if chromosome exists in BAM
+                    if chrom not in bam_chroms:
+                        print(f"❌ Chromosome '{chrom}' not found in BAM file!")
+                        print(f"Available chromosomes: {', '.join(sorted(bam_chroms))}")
+                        return False
+                    # Convert from 1-based to 0-based coordinates for pysam
+                    bin_list = [(chrom, start - 1, end)]
                 else:
                     print(
-                        f"   Missing: {', '.join(missing_in_ref[:10])} ... and {len(missing_in_ref) - 10} more"
+                        f"❌ Invalid region format: {region}. Use 'chr1:1000000-2000000'"
                     )
+                    return False
+            else:
+                # Process only chromosomes present in BAM; query lengths from reference
+                valid_chroms = []
+                missing_in_ref = []
+                for chrom in bam_chroms:
+                    if chrom not in ref_chrom_lengths:
+                        missing_in_ref.append(chrom)
+                        continue
+                    chrom_length = ref_chrom_lengths[chrom]
+                    valid_chroms.append(chrom)
+                    bin_start = 0
+                    while bin_start < chrom_length:
+                        bin_end = min(bin_start + bin_size, chrom_length)
+                        bin_list.append((chrom, bin_start, bin_end))
+                        bin_start += bin_size
 
-            print(f"✅ Processing {len(valid_chroms)} valid chromosomes")
-
-        print(
-            f"✅ Created {len(bin_list)} bins across {len({b[0] for b in bin_list})} chromosomes"
-        )
-
-        # Determine which strands to process
-        process_both_strands = strand.lower() == "both"
-        process_forward_only = strand.lower() == "forward"
-        process_reverse_only = strand.lower() == "reverse"
-
-        if not any([process_both_strands, process_forward_only, process_reverse_only]):
-            print(
-                f"❌ Invalid strand option '{strand}'. Must be 'both', 'forward', or 'reverse'"
-            )
-            return False
-
-        # Use all regions for now (pre-filtering can be added later)
-        print("🔍 Using all regions for processing...")
-        total_skipped = 0
-        filtered_bin_list = bin_list
-        print(f"✅ Processing {len(filtered_bin_list)} regions")
-
-        # Prepare worker arguments - now process both strands in one worker
-        worker_args = []
-        for i, (chrom, bin_start, bin_end) in enumerate(filtered_bin_list):
-            temp_bam_path = (
-                os.path.join(temp_dir, f"temp_{i}.bam") if tagging_enabled else None
-            )
-            worker_args.append(
-                (
-                    samfile,
-                    chrom,
-                    bin_start,
-                    bin_end,
-                    strand,  # Pass the strand option to worker
-                    ref_base,
-                    mut_base,
-                    ref_base2,
-                    mut_base2,
-                    temp_bam_path,
-                    save_rest,
-                    pad,
-                    trim_start,
-                    trim_end,
-                    max_unc,
-                    min_con,
-                    max_sub,
-                    min_baseq,
-                    min_mapq,
-                    i,
-                )
-            )
-
-        # Process all regions with optimal parallelism
-        total_processed = 0
-        total_counts = 0
-        total_skipped = 0
-        total_reads = 0
-        all_results = []
-        all_timings: list[dict[str, float]] = []
-        worker_temp_bams = []
-
-        # Write header immediately if outputting to stdout
-        if output_file is None:
-            headers = get_output_headers(save_rest)
-            print("\t".join(headers))
-            # Flush to ensure immediate output
-            import sys
-
-            sys.stdout.flush()
-
-        print(f"🚀 Processing {len(worker_args)} regions with {threads} threads...")
-        print(
-            f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})"
-        )
-
-        with Progress(
-            "[progress.description]{task.description}",
-            "[progress.percentage]{task.percentage:>3.0f}%",
-            "[cyan]{task.completed}/{task.total} regions",
-            "[green]{task.fields[counts]:,} mutations",
-            "[magenta]{task.fields[reads]:,} reads",
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            expand=False,
-        ) as progress:
-            task = progress.add_task(
-                "🔄 Processing regions...", total=len(worker_args), counts=0, reads=0
-            )
-
-            # Use ProcessPoolExecutor for optimal parallelism
-            # This automatically handles load balancing and memory management
-            with ProcessPoolExecutor(
-                max_workers=threads,
-                initializer=_init_worker,
-                initargs=(samfile, reffile),
-            ) as executor:
-                # Submit all tasks at once for maximum parallelism
-                future_to_args = {
-                    executor.submit(parse_region_worker, args): args
-                    for args in worker_args
-                }
-
-                # Process results as they complete and stream output
-                for future in as_completed(future_to_args):
-                    result = future.result()
-                    total_processed += 1
-
-                    if result["success"]:
-                        # Check if region was skipped
-                        if result.get("skipped", False):
-                            total_skipped += 1
-                        else:
-                            total_counts += len(result["counts"])
-                        # Accumulate reads and timing
-                        total_reads += result.get("reads", 0)
-                        if result.get("timings"):
-                            all_timings.append(result["timings"])
-
-                        # Stream results immediately if outputting to stdout
-                        if output_file is None and result["counts"]:
-                            for row in result["counts"]:
-                                print("\t".join(map(str, row)))
-                                sys.stdout.flush()
-                        else:
-                            # Collect for file output
-                            all_results.extend(result["counts"])
-
-                        if result.get("temp_bam_path"):
-                            worker_temp_bams.append(result["temp_bam_path"])
-
+                if missing_in_ref:
+                    print(
+                        f"⚠️  {len(missing_in_ref)} BAM chromosomes not found in reference"
+                    )
+                    if len(missing_in_ref) <= 10:
+                        print(f"   Missing: {', '.join(missing_in_ref)}")
                     else:
-                        logger.warning(
-                            f"Failed to process region {result['region']}: {result['error']}"
+                        print(
+                            f"   Missing: {', '.join(missing_in_ref[:10])} ... and {len(missing_in_ref) - 10} more"
                         )
 
-                    # Update progress
-                    progress.update(
-                        task, advance=1, counts=total_counts, reads=total_reads
-                    )
+                print(f"✅ Processing {len(valid_chroms)} valid chromosomes")
 
-        # Write results to file if specified
-        if output_file:
-            print("📝 Writing results to file...")
-            # Sort results by chromosome and position
-            all_results.sort(key=lambda x: (x[0], x[1]))
-            write_output(all_results, output_file, save_rest)
-
-        # Merge, sort, and index temporary BAM files if tagging was enabled
-        if tagging_enabled and worker_temp_bams:
-            print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
-
-            final_tagged_bam = (
-                output_bam
-                or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
+            print(
+                f"✅ Created {len(bin_list)} bins across {len({b[0] for b in bin_list})} chromosomes"
             )
 
-            try:
-                # Use pysam cat for robust merging
-                pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
+            # Determine which strands to process
+            process_both_strands = strand.lower() == "both"
+            process_forward_only = strand.lower() == "forward"
+            process_reverse_only = strand.lower() == "reverse"
 
-                print("Sorting and indexing final BAM...")
-                sorted_bam_path = final_tagged_bam + ".sorted"
-                pysam.sort("-@", str(threads), "-o", sorted_bam_path, final_tagged_bam)
-                shutil.move(sorted_bam_path, final_tagged_bam)
-                pysam.index(final_tagged_bam)
+            if not any(
+                [process_both_strands, process_forward_only, process_reverse_only]
+            ):
+                print(
+                    f"❌ Invalid strand option '{strand}'. Must be 'both', 'forward', or 'reverse'"
+                )
+                return False
 
-                if not output_bam:
-                    _temp_files_to_clean.add(final_tagged_bam)
-                    _temp_files_to_clean.add(final_tagged_bam + ".bai")
+            # Use all regions for now (pre-filtering can be added later)
+            print("🔍 Using all regions for processing...")
+            total_skipped = 0
+            filtered_bin_list = bin_list
+            print(f"✅ Processing {len(filtered_bin_list)} regions")
 
-                print(f"✅ Final tagged BAM created: {final_tagged_bam}")
+            # Prepare worker arguments - now process both strands in one worker
+            worker_args = []
+            for i, (chrom, bin_start, bin_end) in enumerate(filtered_bin_list):
+                temp_bam_path = (
+                    os.path.join(temp_dir, f"temp_{i}.bam") if tagging_enabled else None
+                )
+                worker_args.append(
+                    (
+                        samfile,
+                        chrom,
+                        bin_start,
+                        bin_end,
+                        strand,  # Pass the strand option to worker
+                        ref_base,
+                        mut_base,
+                        ref_base2,
+                        mut_base2,
+                        temp_bam_path,
+                        save_rest,
+                        pad,
+                        trim_start,
+                        trim_end,
+                        max_unc,
+                        min_con,
+                        max_sub,
+                        min_baseq,
+                        min_mapq,
+                        i,
+                    )
+                )
 
-            except Exception as e:
-                print(f"❌ Failed during BAM processing: {e}")
-            finally:
-                if temp_dir:
-                    shutil.rmtree(temp_dir)
+            # Process all regions with optimal parallelism
+            total_processed = 0
+            total_counts = 0
+            total_skipped = 0
+            total_reads = 0
+            all_results = []
+            all_timings: list[dict[str, float]] = []
+            worker_temp_bams = []
 
-        # Print summary
-        elapsed_time = time.time() - start_time
-        print("✅ Processing completed!")
-        print(f"   Regions processed: {total_processed}")
-        print(f"   Regions skipped (no reads): {total_skipped}")
-        print(f"   Total mutations found: {total_counts}")
-        print(f"   Time elapsed: {elapsed_time:.2f}s")
-        print(f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec")
-        if total_skipped > 0:
-            print(f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!")
-        if all_timings:
-            # Calculate average total time
-            total_time = sum(t.get("total", 0) for t in all_timings)
-            n = len(all_timings)
-            avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
-            print(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
+            # Write header immediately if outputting to stdout
+            if output_file is None:
+                headers = get_output_headers(save_rest)
+                print("\t".join(headers))
+                # Flush to ensure immediate output
+                import sys
 
-        return True
+                sys.stdout.flush()
+
+            print(f"🚀 Processing {len(worker_args)} regions with {threads} threads...")
+            print(
+                f"📊 Strand processing: {strand} ({'2 strands' if strand.lower() == 'both' else '1 strand'})"
+            )
+
+            with Progress(
+                "[progress.description]{task.description}",
+                "[progress.percentage]{task.percentage:>3.0f}%",
+                "[cyan]{task.completed}/{task.total} regions",
+                "[green]{task.fields[counts]:,} mutations",
+                "[magenta]{task.fields[reads]:,} reads",
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                expand=False,
+            ) as progress:
+                task = progress.add_task(
+                    "🔄 Processing regions...",
+                    total=len(worker_args),
+                    counts=0,
+                    reads=0,
+                )
+
+                # Use ProcessPoolExecutor for optimal parallelism
+                # This automatically handles load balancing and memory management
+                with ProcessPoolExecutor(
+                    max_workers=threads,
+                    initializer=_init_worker,
+                    initargs=(samfile, reffile),
+                ) as executor:
+                    # Submit all tasks at once for maximum parallelism
+                    future_to_args = {
+                        executor.submit(parse_region_worker, args): args
+                        for args in worker_args
+                    }
+
+                    # Process results as they complete and stream output
+                    for future in as_completed(future_to_args):
+                        result = future.result()
+                        total_processed += 1
+
+                        if result["success"]:
+                            # Check if region was skipped
+                            if result.get("skipped", False):
+                                total_skipped += 1
+                            else:
+                                total_counts += len(result["counts"])
+                            # Accumulate reads and timing
+                            total_reads += result.get("reads", 0)
+                            if result.get("timings"):
+                                all_timings.append(result["timings"])
+
+                            # Stream results immediately if outputting to stdout
+                            if output_file is None and result["counts"]:
+                                for row in result["counts"]:
+                                    print("\t".join(map(str, row)))
+                                    sys.stdout.flush()
+                            else:
+                                # Collect for file output
+                                all_results.extend(result["counts"])
+
+                            if result.get("temp_bam_path"):
+                                worker_temp_bams.append(result["temp_bam_path"])
+
+                        else:
+                            logger.warning(
+                                f"Failed to process region {result['region']}: {result['error']}"
+                            )
+
+                        # Update progress
+                        progress.update(
+                            task, advance=1, counts=total_counts, reads=total_reads
+                        )
+
+            # Write results to file if specified
+            if output_file:
+                print("📝 Writing results to file...")
+                # Sort results by chromosome and position
+                all_results.sort(key=lambda x: (x[0], x[1]))
+                write_output(all_results, output_file, save_rest)
+
+            # Merge, sort, and index temporary BAM files if tagging was enabled
+            if tagging_enabled and worker_temp_bams:
+                print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
+
+                final_tagged_bam = (
+                    output_bam
+                    or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
+                )
+
+                try:
+                    # Use pysam cat for robust merging
+                    pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
+
+                    print("Sorting and indexing final BAM...")
+                    sorted_bam_path = final_tagged_bam + ".sorted"
+                    pysam.sort(
+                        "-@", str(threads), "-o", sorted_bam_path, final_tagged_bam
+                    )
+                    os.replace(sorted_bam_path, final_tagged_bam)
+                    pysam.index(final_tagged_bam)
+
+                    if not output_bam:
+                        _temp_files_to_clean.add(final_tagged_bam)
+                        _temp_files_to_clean.add(final_tagged_bam + ".bai")
+
+                    print(f"✅ Final tagged BAM created: {final_tagged_bam}")
+
+                except Exception as e:
+                    print(f"❌ Failed during BAM processing: {e}")
+
+            # Print summary
+            elapsed_time = time.time() - start_time
+            print("✅ Processing completed!")
+            print(f"   Regions processed: {total_processed}")
+            print(f"   Regions skipped (no reads): {total_skipped}")
+            print(f"   Total mutations found: {total_counts}")
+            print(f"   Time elapsed: {elapsed_time:.2f}s")
+            print(
+                f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec"
+            )
+            if total_skipped > 0:
+                print(
+                    f"   ⚡ Performance boost: Skipped {total_skipped} empty regions!"
+                )
+            if all_timings:
+                # Calculate average total time
+                total_time = sum(t.get("total", 0) for t in all_timings)
+                n = len(all_timings)
+                avg_time_ms = (total_time * 1000 / n) if n > 0 else 0
+                print(f"   ⏱️ Average per-window time: {avg_time_ms:.1f} ms")
+
+            return True
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
