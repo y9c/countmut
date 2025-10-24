@@ -331,6 +331,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         skipped_missing_tags = 0
         skipped_no_sequence = 0
         processed_reads = 0
+        reads_with_all_bases_dropped = 0 # New counter for reads that pass initial filters but all bases are dropped
 
         # Initialize is_skipped and total_skipped_reads for the worker result
         is_skipped = False
@@ -530,12 +531,12 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     outfile.write(read)  # Write unmodified read on error
                 continue
 
-            # After processing all positions for a read, update processed_reads and total_skipped_reads
+            # After processing all positions for a read
             if read_contributes_to_counts:
                 processed_reads += 1
-            elif read_has_dropped_bases:
-                # If a read didn't contribute to counts but had dropped bases, count it as skipped
-                total_skipped_reads += 1
+            elif not read_contributes_to_counts and read_has_dropped_bases:
+                # If a read didn't contribute to counts but had dropped bases, it means all its bases were dropped.
+                reads_with_all_bases_dropped += 1
 
             if outfile:
                 outfile.write(
@@ -586,6 +587,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             + skipped_unmapped_dup_secondary
             + skipped_missing_tags
             + skipped_no_sequence
+            + reads_with_all_bases_dropped # Include reads where all bases were dropped
         )
         # A region is considered skipped if no reads were successfully processed through all filters
         if processed_reads == 0:
