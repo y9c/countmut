@@ -312,41 +312,49 @@ def main(
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
 
-    info_table = Table.grid(padding=(0, 1, 0, 1))
-    info_table.add_row("Input BAM:", input_bam_abs)
-    info_table.add_row("Reference:", reference_fasta_abs)
-    info_table.add_row("Output:", output_file_abs or "Stdout")
-    info_table.add_row("Reference base:", ref_base)
-    info_table.add_row("Mutation base:", mut_base)
-    if ref_base2 and mut_base2:
-        info_table.add_row("Alt. Reference base:", ref_base2)
-        info_table.add_row("Alt. Mutation base:", mut_base2)
-        info_table.add_row("Output BAM:", output_bam_abs or "Temporary")
-    info_table.add_row("Bin size:", f"{bin_size:,}")
-    info_table.add_row("Threads:", str(threads))
-    info_table.add_row("Save additional stats:", "Yes" if save_rest else "No")
-    if region:
-        info_table.add_row("Region:", region)
-    info_table.add_row("Pad:", str(pad))
-    info_table.add_row("Trim start:", str(trim_start))
-    info_table.add_row("Trim end:", str(trim_end))
-    info_table.add_row("Max unconverted (Zf):", str(max_unc))
-    info_table.add_row("Min converted (Yf):", str(min_con))
-    info_table.add_row("Max substitutions (NS):", str(max_sub))
-    info_table.add_row("Min base quality (Q):", str(min_baseq))
-    info_table.add_row("Min mapping quality (MAPQ):", str(min_mapq))
-    info_table.add_row("Verbose logging:", "Yes" if verbose else "No")
-
-    console.print(
-        Panel(
-            info_table,
-            title="[bold green]Processing configuration[/bold green]",
-            border_style="green",
-            padding=(1, 2),
-        )
-    )
-
     try:
+        # Display processing configuration in a rich panel
+        config_table = Table(box=rich.box.MINIMAL, show_header=False)
+        config_table.add_column("Setting", style="bold")
+        config_table.add_column("Value", style="cyan")
+
+        config_table.add_row("Input BAM:", input_bam_abs)
+        config_table.add_row("Reference:", reference_fasta_abs)
+        config_table.add_row("Output:", output_file_abs if output_file_abs else "(stdout)")
+        if output_bam_abs:
+            config_table.add_row("Output BAM:", output_bam_abs)
+        if ref_base2 and mut_base2:
+            config_table.add_row("Reference base:", ref_base)
+            config_table.add_row("Mutation base:", mut_base)
+            config_table.add_row("Alt. Reference base:", ref_base2)
+            config_table.add_row("Alt. Mutation base:", mut_base2)
+        else:
+            config_table.add_row("Reference base:", ref_base)
+            config_table.add_row("Mutation base:", mut_base)
+        config_table.add_row("Bin size:", f"{bin_size:,}")
+        config_table.add_row("Threads:", str(threads))
+        config_table.add_row("Save additional stats:", "Yes" if save_rest else "No")
+        if region:
+            config_table.add_row("Region:", region)
+        config_table.add_row("Strand processing:", strand)
+        config_table.add_row("Pad:", str(pad))
+        config_table.add_row("Trim start:", str(trim_start))
+        config_table.add_row("Trim end:", str(trim_end))
+        config_table.add_row("Max unconverted (Zf):", str(max_unc))
+        config_table.add_row("Min converted (Yf):", str(min_con))
+        config_table.add_row("Max substitutions (NS):", str(max_sub))
+        config_table.add_row("Min base quality (Q):", str(min_baseq))
+        config_table.add_row("Min mapping quality (MAPQ):", str(min_mapq))
+        config_table.add_row("Verbose logging:", "Yes" if verbose else "No")
+
+        config_panel = Panel(
+            config_table,
+            title="[bold blue]Processing Configuration[/bold blue]",
+            border_style="blue",
+            expand=False,
+        )
+        console.print(config_panel)
+
         console.print("🚀 Starting mutation counting...")
 
         stats = count_mutations(
