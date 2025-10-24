@@ -272,8 +272,7 @@ def main(
     ## 🚀 Ultra-fast strand-aware mutation counter
 
     `countmut` is a high-performance tool for counting specific mutations
-    (e.g., A>G) from BAM files, designed for bisulfite sequencing analysis
-    with quality-based overlap deduplication.
+    (e.g., A->G) from BAM files, designed for bisulfite / m6A sequencing analysis.
     """
     console = Console()
 
