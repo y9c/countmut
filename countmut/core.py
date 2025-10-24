@@ -571,8 +571,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             query_base,
             _q,
             is_internal, # Keep this, used below
-            _passes_mismatch_filter, # No longer used, replace with _
-            _passes_mapq_filter, # No longer used, replace with _
+            _, # passes_mismatch_filter is no longer used here
+            _, # passes_mapq_filter is no longer used here
             passes_baseq_filter, # Keep this, used below
             passes_conversion_filter, # Keep this, used below for counting
         ) in best_obs.items():
