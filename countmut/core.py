@@ -85,6 +85,11 @@ def _worker_shutdown_task():
     return {"shutdown": True}
 
 
+def _warmup_worker():
+    """A dummy worker task to force ProcessPoolExecutor workers to initialize."""
+    return True
+
+
 def _init_worker(samfile_path: str, reffile_path: str, shard_dir: str) -> None:
     """Open BAM/FASTA once per process to avoid repeated open/close overhead and enable BGZF threads."""
     global _GLOBAL_SAM, _GLOBAL_REF, _WORKER_SHARD_PATH, _WORKER_WRITER, _WORKER_ID
@@ -369,8 +374,8 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                                     elif query_base_revcomp == mut_base2:
                                         alt_mut_count += 1
 
-                    read.set_tag("Zc", alt_ref_count, "i")
                     read.set_tag("Yc", alt_mut_count, "i")
+                    read.set_tag("Zc", alt_ref_count, "i")
 
                     if read.has_tag("NS"):
                         ns_val = read.get_tag("NS")
@@ -925,6 +930,15 @@ def count_mutations(
                     initializer=_init_worker,
                     initargs=(samfile, reffile, temp_dir),
                 ) as executor:
+                    # Submit warmup tasks to initialize workers
+                    print("🚀 Warming up worker processes...")
+                    warmup_futures = [
+                        executor.submit(_warmup_worker) for _ in range(threads)
+                    ]
+                    for future in as_completed(warmup_futures):
+                        future.result()  # Wait for each worker to initialize
+                    print("✅ Workers warmed up. Submitting main tasks...")
+
                     # Submit all tasks at once for maximum parallelism
                     future_to_args = {
                         executor.submit(parse_region_worker, args): args
