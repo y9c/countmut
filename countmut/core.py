@@ -982,7 +982,7 @@ def count_mutations(
                     expand=False,
                 ) as progress:
                     task = progress.add_task(
-                        "🔄 Processing regions...",
+                        "Processing regions...",
                         total=len(worker_args),
                         counts=0,
                         reads=0,
