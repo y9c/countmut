@@ -91,7 +91,7 @@ def write_output(
 
     # Determine if alternative mutation counts are present
     num_cols = len(results[0])
-    base_cols = 10 if save_rest else 6
+    base_cols = 13 if save_rest else 10  # Corrected calculation
     include_alt = num_cols > base_cols
     headers = get_output_headers(save_rest, include_alt)
 
