@@ -34,36 +34,20 @@ def format_duration(sec: float) -> str:
     return f"{hours}h {minutes}m {seconds}s"
 
 
-def get_output_headers(save_rest: bool = False) -> list[str]:
+def get_output_headers(save_rest: bool = False, include_alt: bool = False) -> list[str]:
     """
     Get the appropriate output headers based on save_rest parameter.
 
     Args:
         save_rest: Whether to include additional statistics columns
-
+        include_alt: Whether to include alternative mutation columns
     Returns:
         List of column headers
         - u0, u1, u2: unconverted (reference base) counts
         - m0, m1, m2: mutation (mutation base only) counts
         - o0, o1, o2: other bases counts (only with save_rest)
     """
-    if save_rest:
-        return [
-            "chrom",
-            "pos",
-            "strand",
-            "motif",
-            "u0",
-            "u1",
-            "u2",
-            "m0",
-            "m1",
-            "m2",
-            "o0",
-            "o1",
-            "o2",
-        ]
-    return [
+    headers = [
         "chrom",
         "pos",
         "strand",
@@ -75,6 +59,11 @@ def get_output_headers(save_rest: bool = False) -> list[str]:
         "m1",
         "m2",
     ]
+    if save_rest:
+        headers.extend(["o0", "o1", "o2"])
+    if include_alt:
+        headers.extend(["alt_ref", "alt_mut"])
+    return headers
 
 
 def write_output(
@@ -90,7 +79,21 @@ def write_output(
         output_file: Path to output file (if None, prints to stdout)
         save_rest: Whether to include additional statistics columns
     """
-    headers = get_output_headers(save_rest)
+    if not results:
+        # If there are no results, write an empty file with headers
+        if output_file:
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, "w") as out_f:
+                out_f.write("\t".join(get_output_headers(save_rest, False)) + "\n")
+        else:
+            print("\t".join(get_output_headers(save_rest, False)))
+        return
+
+    # Determine if alternative mutation counts are present
+    num_cols = len(results[0])
+    base_cols = 10 if save_rest else 6
+    include_alt = num_cols > base_cols
+    headers = get_output_headers(save_rest, include_alt)
 
     if output_file:
         # Ensure output directory exists

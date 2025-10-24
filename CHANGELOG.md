@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2025-10-24
+
+### Added
+- **Alternative Mutation Tagging**: New feature to count a secondary set of mutations
+  - `--ref-base2` and `--mut-base2` flags to specify alternative mutations (e.g., C->T)
+  - Adds `Yc` (alt-mut) and `Zc` (alt-ref) tags to each read
+  - Corrects `NS` tag by subtracting alternative mutation counts
+- **BAM Output**: `--output-bam` flag to save the newly tagged BAM file
+  - If not specified, a temporary BAM is used for counting and then deleted
+  - Enables seamless integration with other bioinformatic tools
+
+### Performance
+- **Thread-Safe Tagging**: Fully parallelized read processing and BAM writing
+  - Each worker writes to a temporary BAM file
+  - Merged and sorted in parallel for maximum speed
+
+### Changed
+- The main `count_mutations` function now orchestrates the tagging and counting process
+- CLI updated with new "Alternative Mutation Tagging" option group
+
 ## [0.0.4] - 2025-10-24
 
 ### Fixed

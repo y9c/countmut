@@ -68,6 +68,10 @@ click.rich_click.OPTION_GROUPS = {
             "options": ["--threads", "--bin-size"],
         },
         {
+            "name": "Alternative Mutation Tagging",
+            "options": ["--ref-base2", "--mut-base2", "--output-bam"],
+        },
+        {
             "name": "Help & Version",
             "options": ["--help", "--version"],
         },
@@ -151,6 +155,11 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     help="[bold]Output file[/bold] for mutation counts (TSV format). If not specified, prints to stdout.",
 )
 @click.option(
+    "--output-bam",
+    type=click.Path(path_type=str),
+    help="[bold]Output BAM file[/bold] with alternative mutation tags (Yc, Zc). If not specified, a temporary file is used and then deleted.",
+)
+@click.option(
     "--ref-base",
     default="A",
     show_default=True,
@@ -161,6 +170,16 @@ countmut -i input.bam -r reference.fa --region chr1:1000000-2000000
     default="G",
     show_default=True,
     help="[bold]Mutation base[/bold] to count (A, T, G, or C)",
+)
+@click.option(
+    "--ref-base2",
+    default=None,
+    help="[bold]Alternative reference base[/bold] for tagging (e.g., 'C')",
+)
+@click.option(
+    "--mut-base2",
+    default=None,
+    help="[bold]Alternative mutation base[/bold] for tagging (e.g., 'T')",
 )
 @click.option(
     "-b",
@@ -269,8 +288,11 @@ def main(
     samfile: str,
     reffile: str,
     output: str,
+    output_bam: str,
     ref_base: str,
     mut_base: str,
+    ref_base2: str,
+    mut_base2: str,
     bin_size: int,
     threads: int,
     save_rest: bool,
@@ -378,6 +400,10 @@ def main(
     info_table.add_row("Output:", output or "stdout")
     info_table.add_row("Reference base:", ref_base.upper())
     info_table.add_row("Mutation base:", mut_base.upper())
+    if ref_base2 and mut_base2:
+        info_table.add_row("Alt. Reference base:", ref_base2.upper())
+        info_table.add_row("Alt. Mutation base:", mut_base2.upper())
+        info_table.add_row("Output BAM:", output_bam or "Temporary")
     info_table.add_row("Bin size:", f"{bin_size:,}")
     info_table.add_row("Threads:", str(threads or "auto"))
     info_table.add_row("Save additional stats:", "Yes" if save_rest else "No")
@@ -417,8 +443,11 @@ def main(
             samfile=samfile,
             reffile=reffile,
             output_file=output,
+            output_bam=output_bam,
             ref_base=ref_base.upper(),
             mut_base=mut_base.upper(),
+            ref_base2=ref_base2,
+            mut_base2=mut_base2,
             bin_size=bin_size,
             threads=threads,
             save_rest=save_rest,

@@ -9,8 +9,11 @@ Author: Ye Chang
 Date: 2025-10-23
 """
 
+import atexit
 import logging
 import os
+import shutil
+import tempfile
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -154,12 +157,16 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         overall_start = time.time()
         # Unpack arguments
         (
+            samfile_path,
             region_chrom,
             region_start,
             region_end,
             strand_option,  # both/forward/reverse
             ref_base,
             mut_base,
+            ref_base2,
+            mut_base2,
+            temp_bam_path,
             save_rest,
             pad,
             trim_start,
@@ -171,6 +178,12 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             min_mapq,
             worker_id,
         ) = args
+
+        # Setup for optional BAM writing
+        outfile = None
+        if temp_bam_path:
+            with pysam.AlignmentFile(samfile_path, "rb") as infile:
+                outfile = pysam.AlignmentFile(temp_bam_path, "wb", header=infile.header)
 
         # Require per-process global handles (must be initialized by pool initializer)
         if _GLOBAL_SAM is None or _GLOBAL_REF is None:
@@ -277,9 +290,36 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         # Track best observation per (ref_pos, query_name) to avoid double counting overlapping mates
         # Value: (strand, base, qual, is_internal, is_mapped, is_converted)
         best_obs: dict[tuple[int, str], tuple[str, str, int, bool, bool, bool]] = {}
-        for read in samfile.fetch(region_chrom, region_start, region_end):
+
+        reads_to_process = samfile.fetch(region_chrom, region_start, region_end)
+        if outfile:
+            # If we are writing a BAM, we must iterate over a copy,
+            # as modifying tags can affect iteration over the original.
+            reads_to_process = list(reads_to_process)
+
+        for read in reads_to_process:
             total_reads += 1
             try:
+                # If tagging is enabled, count alternative mutations and update tags
+                if ref_base2 and mut_base2:
+                    alt_ref_count = (
+                        read.query_sequence.upper().count(ref_base2)
+                        if read.query_sequence
+                        else 0
+                    )
+                    alt_mut_count = (
+                        read.query_sequence.upper().count(mut_base2)
+                        if read.query_sequence
+                        else 0
+                    )
+
+                    read.set_tag("Zc", alt_ref_count, "i")
+                    read.set_tag("Yc", alt_mut_count, "i")
+
+                    if read.has_tag("NS"):
+                        ns_val = read.get_tag("NS")
+                        read.set_tag("NS", max(0, ns_val - alt_mut_count), "i")
+
                 # Determine which strand to process based on read orientation
                 actual_strand = determine_actual_strand(read)
 
@@ -381,7 +421,12 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             except (KeyError, AttributeError) as e:
                 # Skip reads with missing tags or invalid data
                 logger.debug(f"Skipping read due to missing tag: {e}")
+                if outfile:
+                    outfile.write(read)  # Write unmodified read on error
                 continue
+
+            if outfile:
+                outfile.write(read)
 
         # Apply best observations to position counts (deduplicated across overlapping mates)
         for (ref_pos, _qname), (
@@ -489,6 +534,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     else:
                         counts.append(site_info + [u0, u1, u2, m0, m1, m2])
 
+        if outfile:
+            outfile.close()
+
         return {
             "worker_id": worker_id,
             "region": f"{region_chrom}:{region_start}-{region_end}:{strand_option}",
@@ -498,9 +546,9 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
             "reads": processed_reads,
             "total_reads": total_reads,
             "skipped_reads": total_skipped,
+            "temp_bam_path": temp_bam_path if outfile else None,
             "timings": {"total": time.time() - overall_start},
         }
-
     except Exception as e:
         logger.error(f"Error in worker {worker_id}: {e}")
         return {
@@ -517,12 +565,30 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         pass
 
 
+_temp_files_to_clean = set()
+
+
+def cleanup_temp_files():
+    for f in _temp_files_to_clean:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    _temp_files_to_clean.clear()
+
+
+atexit.register(cleanup_temp_files)
+
+
 def count_mutations(
     samfile: str,
     reffile: str,
     output_file: str | None = None,
+    output_bam: str | None = None,
     ref_base: str = "A",
     mut_base: str = "G",
+    ref_base2: str | None = None,
+    mut_base2: str | None = None,
     bin_size: int = 10_000,
     threads: int | None = None,
     save_rest: bool = False,
@@ -572,6 +638,17 @@ def count_mutations(
     # Convert bases to uppercase once at the beginning
     ref_base = ref_base.upper()
     mut_base = mut_base.upper()
+
+    # Handle alternative mutation tagging
+    tagging_enabled = ref_base2 and mut_base2
+    temp_dir = None
+    if tagging_enabled:
+        ref_base2 = ref_base2.upper()
+        mut_base2 = mut_base2.upper()
+        temp_dir = tempfile.mkdtemp()
+        print(
+            f"🏷️ Alternative mutation tagging enabled. Temporary directory: {temp_dir}"
+        )
 
     # Validate input files exist
     if not os.path.exists(samfile):
@@ -705,14 +782,21 @@ def count_mutations(
         # Prepare worker arguments - now process both strands in one worker
         worker_args = []
         for i, (chrom, bin_start, bin_end) in enumerate(filtered_bin_list):
+            temp_bam_path = (
+                os.path.join(temp_dir, f"temp_{i}.bam") if tagging_enabled else None
+            )
             worker_args.append(
                 (
+                    samfile,
                     chrom,
                     bin_start,
                     bin_end,
                     strand,  # Pass the strand option to worker
                     ref_base,
                     mut_base,
+                    ref_base2,
+                    mut_base2,
+                    temp_bam_path,
                     save_rest,
                     pad,
                     trim_start,
@@ -733,6 +817,7 @@ def count_mutations(
         total_reads = 0
         all_results = []
         all_timings: list[dict[str, float]] = []
+        worker_temp_bams = []
 
         # Write header immediately if outputting to stdout
         if output_file is None:
@@ -799,6 +884,10 @@ def count_mutations(
                         else:
                             # Collect for file output
                             all_results.extend(result["counts"])
+
+                        if result.get("temp_bam_path"):
+                            worker_temp_bams.append(result["temp_bam_path"])
+
                     else:
                         logger.warning(
                             f"Failed to process region {result['region']}: {result['error']}"
@@ -815,6 +904,37 @@ def count_mutations(
             # Sort results by chromosome and position
             all_results.sort(key=lambda x: (x[0], x[1]))
             write_output(all_results, output_file, save_rest)
+
+        # Merge, sort, and index temporary BAM files if tagging was enabled
+        if tagging_enabled and worker_temp_bams:
+            print(f"Merging {len(worker_temp_bams)} temporary BAM files...")
+
+            final_tagged_bam = (
+                output_bam
+                or tempfile.NamedTemporaryFile(delete=False, suffix=".bam").name
+            )
+
+            try:
+                # Use pysam cat for robust merging
+                pysam.cat("-o", final_tagged_bam, *worker_temp_bams)
+
+                print("Sorting and indexing final BAM...")
+                sorted_bam_path = final_tagged_bam + ".sorted"
+                pysam.sort("-@", str(threads), "-o", sorted_bam_path, final_tagged_bam)
+                shutil.move(sorted_bam_path, final_tagged_bam)
+                pysam.index(final_tagged_bam)
+
+                if not output_bam:
+                    _temp_files_to_clean.add(final_tagged_bam)
+                    _temp_files_to_clean.add(final_tagged_bam + ".bai")
+
+                print(f"✅ Final tagged BAM created: {final_tagged_bam}")
+
+            except Exception as e:
+                print(f"❌ Failed during BAM processing: {e}")
+            finally:
+                if temp_dir:
+                    shutil.rmtree(temp_dir)
 
         # Print summary
         elapsed_time = time.time() - start_time
@@ -839,3 +959,5 @@ def count_mutations(
         logger.error(f"Error during processing: {e}")
         print(f"❌ Processing failed: {e}")
         return False
+    finally:
+        cleanup_temp_files()

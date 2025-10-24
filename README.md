@@ -59,6 +59,13 @@ countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-co
 -b, --bin-size INTEGER Genomic bin size in bp [default: 10000]
 ```
 
+**Alternative Mutation Tagging**
+```bash
+--ref-base2 TEXT       Alternative reference base for tagging (e.g., 'C')
+--mut-base2 TEXT       Alternative mutation base for tagging (e.g., 'T')
+--output-bam PATH      Output BAM with alternative tags (Yc, Zc)
+```
+
 **Quality Filters**
 ```bash
 --min-baseq INTEGER    Min base quality (Phred score) [default: 20]
