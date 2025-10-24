@@ -547,13 +547,6 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
         if processed_reads == 0:
             is_skipped = True
 
-        # Log read processing statistics
-        if total_reads > 0:
-            logger.info(
-                f"📊 Region {region_chrom}:{region_start}-{region_end}:{strand_option} - "
-                f"Total: {total_reads}, Processed: {processed_reads}, Skipped: {total_skipped_reads}"
-            )
-
         # Process each target position for each strand
         for pos in target_sites_list:
             for strand_symbol in ["+", "-"]:
@@ -1056,18 +1049,14 @@ def count_mutations(
 
             # Print summary
             elapsed_time = time.time() - start_time
-            logger.info("✅ Processing completed!")
+            logger.info(f"✅ Processing completed! (⏱️ {elapsed_time:.2f}s)")
             logger.info(f"   Regions processed: {total_processed}")
             logger.info(f"   Regions skipped (no reads): {total_skipped}")
-            logger.info(
-                f"   Total raw reads: {total_raw_reads_all_workers}"
-            )  # New summary stat
+            logger.info(f"   Total raw reads: {total_raw_reads_all_workers}")
             logger.info(
                 f"   Total reads processed: {total_reads_processed_all_workers}"
-            )  # New summary stat
-            logger.info(
-                f"   Total reads skipped: {total_reads_skipped_all_workers}"
-            )  # New summary stat
+            )
+            logger.info(f"   Total reads skipped: {total_reads_skipped_all_workers}")
             if total_reads_skipped_all_workers > 0:
                 logger.info(
                     f"      Skipped details: wrong_strand={total_skipped_wrong_strand_agg}, "
@@ -1076,7 +1065,6 @@ def count_mutations(
                     f"no_sequence={total_skipped_no_sequence_agg}"
                 )
             logger.info(f"   Total mutations found: {total_counts}")
-            logger.info(f"   Time elapsed: {elapsed_time:.2f}s")
             logger.info(
                 f"   Processing rate: {total_processed / elapsed_time:.1f} regions/sec"
             )
