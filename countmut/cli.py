@@ -35,8 +35,8 @@ click.rich_click.ERRORS_EPILOGUE = "To find out more, visit [link=https://github
 click.rich_click.TEXT_EMOJIS = True
 
 # Define option groups for better CLI help formatting
-OPTION_GROUPS = {
-    "countmut.cli": [
+click.rich_click.OPTION_GROUPS = {
+    "countmut": [
         {
             "name": "Input/Output Options",
             "options": [
