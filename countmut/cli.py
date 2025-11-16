@@ -60,6 +60,7 @@ click.rich_click.OPTION_GROUPS = {
                 "--region",
                 "--strand",
                 "--pad",
+                "--max-reads-per-chunk",
             ],
         },
         {
@@ -241,6 +242,13 @@ console = Console()
     help="[dim](base-level)[/dim] [bold]Min base quality[/bold] (Phred score) to count bases",
 )
 @click.option(
+    "--max-reads-per-chunk",
+    type=int,
+    default=100_000,
+    show_default=True,
+    help="[bold]Maximum reads per chunk[/bold] before splitting region for parallel processing (default: 100,000)",
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -269,6 +277,7 @@ def main(
     max_sub: int,
     min_baseq: int,
     min_mapq: int,
+    max_reads_per_chunk: int,
     verbose: bool,
 ):
     """
@@ -340,6 +349,7 @@ def main(
         config_table.add_row("Max substitutions (NS):", str(max_sub))
         config_table.add_row("Min base quality (Q):", str(min_baseq))
         config_table.add_row("Min mapping quality (MAPQ):", str(min_mapq))
+        config_table.add_row("Max reads per chunk:", f"{max_reads_per_chunk:,}")
         config_table.add_row("Verbose logging:", "Yes" if verbose else "No")
 
         config_panel = Panel(
@@ -373,6 +383,7 @@ def main(
             max_sub=max_sub,
             min_baseq=min_baseq,
             min_mapq=min_mapq,
+            max_reads_per_chunk=max_reads_per_chunk,
             verbose=verbose,
         )
 

@@ -694,6 +694,66 @@ def cleanup_temp_files():
 atexit.register(cleanup_temp_files)
 
 
+def _split_region_if_needed(
+    samfile: pysam.AlignmentFile | str,
+    chrom: str,
+    region_start: int,
+    region_end: int,
+    max_reads_per_chunk: int = 100_000,
+    min_chunk_size: int = 1_000,
+) -> list[tuple[str, int, int]]:
+    """
+    Split a region into smaller chunks if it has too many reads.
+    
+    Args:
+        samfile: Either a pysam.AlignmentFile object (for reuse) or path to BAM file
+        chrom: Chromosome name
+        region_start: Start position (0-based)
+        region_end: End position (0-based)
+        max_reads_per_chunk: Maximum reads per chunk before splitting
+        min_chunk_size: Minimum chunk size in base pairs
+        
+    Returns:
+        List of (chrom, start, end) tuples for chunks
+    """
+    try:
+        # Handle both file path and open file object
+        if isinstance(samfile, str):
+            samfile_open = pysam.AlignmentFile(samfile, "rb")
+            read_count = samfile_open.count(chrom, region_start, region_end)
+            samfile_open.close()
+        else:
+            # Reuse the provided file handle
+            read_count = samfile.count(chrom, region_start, region_end)
+        
+        # If read count is below threshold, return original region
+        if read_count <= max_reads_per_chunk:
+            return [(chrom, region_start, region_end)]
+        
+        # Calculate number of chunks needed
+        num_chunks = (read_count + max_reads_per_chunk - 1) // max_reads_per_chunk
+        region_size = region_end - region_start
+        chunk_size = max(region_size // num_chunks, min_chunk_size)
+        
+        # Split region into chunks
+        chunks = []
+        chunk_start = region_start
+        while chunk_start < region_end:
+            chunk_end = min(chunk_start + chunk_size, region_end)
+            chunks.append((chrom, chunk_start, chunk_end))
+            chunk_start = chunk_end
+        
+        logger.info(
+            f"📦 Split region {chrom}:{region_start}-{region_end} "
+            f"({read_count:,} reads) into {len(chunks)} chunks"
+        )
+        return chunks
+    except Exception as e:
+        logger.warning(f"Failed to count reads for {chrom}:{region_start}-{region_end}: {e}")
+        # Return original region if counting fails
+        return [(chrom, region_start, region_end)]
+
+
 def count_mutations(
     samfile: str,
     reference: str,
@@ -718,6 +778,7 @@ def count_mutations(
     min_baseq: int = 20,
     min_mapq: int = 0,
     verbose: bool = False,
+    max_reads_per_chunk: int = 100_000,
 ) -> dict:
     """
     Count mutations from BAM pileup data with parallel processing.
@@ -728,6 +789,7 @@ def count_mutations(
     3. No shared state between workers
     4. Efficient memory usage with streaming
     5. Proper error handling and cleanup
+    6. Automatically chunks regions with too many reads for parallel processing
 
     Args:
         samfile: Path to input BAM file
@@ -745,6 +807,7 @@ def count_mutations(
         max_unc: Max unconverted threshold (Zf) to consider converted (default: 3)
         min_con: Min converted threshold (Yf) to consider converted (default: 1)
         max_sub: Max substitutions (NS) to consider mapped (default: 1)
+        max_reads_per_chunk: Maximum reads per chunk before splitting region (default: 100,000)
 
     Returns:
         True if successful, False otherwise
@@ -912,6 +975,35 @@ def count_mutations(
             total_skipped = 0
             filtered_bin_list = bin_list
             logger.info(f"✅ Processing {len(filtered_bin_list)} regions")
+            
+            # Check for regions with too many reads and split them into chunks
+            logger.info("🔍 Checking for regions with high read density...")
+            chunked_bin_list = []
+            regions_split = 0
+            # Open BAM file once for all read count checks
+            samfile_for_counting = pysam.AlignmentFile(samfile, "rb")
+            try:
+                for chrom, bin_start, bin_end in filtered_bin_list:
+                    chunks = _split_region_if_needed(
+                        samfile_for_counting, chrom, bin_start, bin_end, max_reads_per_chunk
+                    )
+                    if len(chunks) > 1:
+                        regions_split += 1
+                    chunked_bin_list.extend(chunks)
+            finally:
+                samfile_for_counting.close()
+            
+            if regions_split > 0:
+                logger.info(
+                    f"📦 Split {regions_split} regions with high read density "
+                    f"into {len(chunked_bin_list)} total chunks"
+                )
+            else:
+                logger.info("✅ No regions needed splitting")
+            
+            # Use chunked bin list for processing
+            filtered_bin_list = chunked_bin_list
+            logger.info(f"✅ Processing {len(filtered_bin_list)} regions/chunks")
 
             # Prepare worker arguments - now process both strands in one worker
             worker_args = []

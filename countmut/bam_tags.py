@@ -98,7 +98,7 @@ def tag_read_with_alternative_mutations(
     # Assume NS tag exists and is correct
     ns_val = read.get_tag("NS")
     read.set_tag("NS", max(0, ns_val - alt_mut_count), "i")
-    
+
     return read
 
 

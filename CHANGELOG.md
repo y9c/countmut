@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2025-01-27
+
+### Added
+- **Region Chunking for High-Density Reads**: Automatic splitting of regions with too many reads
+  - New `--max-reads-per-chunk` option (default: 100,000) to control chunking threshold
+  - Regions exceeding the threshold are automatically split into smaller chunks
+  - Chunks are processed in parallel for improved performance on high-density regions (e.g., rRNA genes)
+  - Optimized BAM file handle reuse during chunking phase
+
+### Performance
+- Improved handling of regions with extremely high read density (e.g., >10M reads)
+- Parallel processing of chunked regions reduces lagging on dense genomic regions
+
+## [0.0.7] - 2025-01-27
+
+### Fixed
+- Fixed `tag_read_with_alternative_mutations` to properly return the modified read
+
 ## [0.0.6] - 2025-10-24
 ### Fixed
 - Resolved `UndefinedName` errors by correctly initializing counters and result lists.
