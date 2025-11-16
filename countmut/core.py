@@ -29,6 +29,10 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from .bam_tags import (
+    calculate_alternative_mutations_in_region,
+    tag_read_with_alternative_mutations,
+)
 from .utils import get_output_headers, write_output
 
 # Set up logger
@@ -356,40 +360,22 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                 actual_strand = determine_actual_strand(read)
                 # If tagging is enabled, count alternative mutations and update tags
                 if ref_base2 and mut_base2:
-                    alt_ref_count = 0
-                    alt_mut_count = 0
-                    if read.query_sequence:
-                        for query_pos, ref_pos in read.get_aligned_pairs(
-                            matches_only=True
-                        ):
-                            if not (region_start <= ref_pos < region_end):
-                                continue
+                    alt_ref_count, alt_mut_count = (
+                        calculate_alternative_mutations_in_region(
+                            read,
+                            ref_base2,
+                            mut_base2,
+                            region_start,
+                            region_end,
+                            target_seq,
+                            actual_strand,
+                            reverse_complement,
+                        )
+                    )
 
-                            ref_base_at_pos = target_seq[ref_pos - region_start].upper()
-                            query_base_at_pos = read.query_sequence[query_pos].upper()
-
-                            if actual_strand == "+":
-                                if ref_base_at_pos == ref_base2:
-                                    if query_base_at_pos == ref_base2:
-                                        alt_ref_count += 1
-                                    elif query_base_at_pos == mut_base2:
-                                        alt_mut_count += 1
-                            else:  # Reverse strand
-                                if ref_base_at_pos == reverse_complement(ref_base2):
-                                    query_base_revcomp = reverse_complement(
-                                        query_base_at_pos
-                                    )
-                                    if query_base_revcomp == ref_base2:
-                                        alt_ref_count += 1
-                                    elif query_base_revcomp == mut_base2:
-                                        alt_mut_count += 1
-
-                    read.set_tag("Yc", alt_mut_count, "i")
-                    read.set_tag("Zc", alt_ref_count, "i")
-
-                    if read.has_tag("NS"):
-                        ns_val = read.get_tag("NS")
-                        read.set_tag("NS", max(0, ns_val - alt_mut_count), "i")
+                    read = tag_read_with_alternative_mutations(
+                        read, alt_ref_count, alt_mut_count
+                    )
 
                 # Skip if we don't want to process this strand
                 if process_forward_only and actual_strand != "+":
@@ -420,15 +406,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                         outfile.write(read)
                     continue
 
-                # Get read properties (avoid exceptions on missing tags)
-                if not (
-                    read.has_tag("NS") and read.has_tag("Zf") and read.has_tag("Yf")
-                ):
-                    skipped_missing_tags += 1
-                    if outfile:
-                        outfile.write(read)  # Write unmodified read on error
-                    continue
-
+                # Get read properties (assume NS, Zf, and Yf tags exist and are correct)
                 # Check mapping quality (read-level filter)
                 if read.mapping_quality < min_mapq:
                     skipped_mapq_filter += 1
@@ -437,6 +415,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     continue
 
                 # Check mismatch filter (read-level filter)
+                # Assume NS tag exists and is correct
                 ns = read.get_tag("NS")
                 if ns > max_sub:
                     skipped_mismatch_filter += 1
@@ -445,6 +424,7 @@ def parse_region_worker(args: tuple) -> dict[str, Any]:
                     continue
 
                 # Check conversion filter (read-level filter)
+                # Assume Zf and Yf tags exist and are correct
                 zf = read.get_tag("Zf")
                 yf = read.get_tag("Yf")
                 if not ((zf <= max_unc) and (yf >= min_con)):

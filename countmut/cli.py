@@ -76,7 +76,11 @@ click.rich_click.OPTION_GROUPS = {
         },
         {
             "name": "Miscellaneous Options",
-            "options": ["--verbose", "--help", "--version"],
+            "options": [
+                "--verbose",
+                "--version",
+                "--help",
+            ],
         },
     ]
 }
@@ -268,8 +272,7 @@ def main(
     verbose: bool,
 ):
     """
-    \b
-    ## 🚀 Ultra-fast strand-aware mutation counter
+    [bold green]🚀 Ultra-fast strand-aware mutation counter[/bold green]
 
     `countmut` is a high-performance tool for counting specific mutations
     (e.g., A->G) from BAM files, designed for bisulfite / m6A sequencing analysis.

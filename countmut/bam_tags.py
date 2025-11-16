@@ -15,6 +15,93 @@ import tempfile
 import pysam
 
 
+def calculate_alternative_mutations_in_region(
+    read: pysam.AlignedSegment,
+    ref_base2: str,
+    mut_base2: str,
+    region_start: int,
+    region_end: int,
+    target_seq: str,
+    actual_strand: str,
+    reverse_complement_func,
+) -> tuple[int, int]:
+    """
+    Calculate alternative mutations (ref_base2 -> mut_base2) for a read within a region.
+
+    This function counts alternative mutations by comparing the reference sequence
+    at each position with the query sequence, handling both forward and reverse strands.
+
+    Args:
+        read: BAM read segment
+        ref_base2: Alternative reference base to count
+        mut_base2: Alternative mutation base to count
+        region_start: Start position of the region (0-based)
+        region_end: End position of the region (0-based)
+        target_seq: Reference sequence for the region
+        actual_strand: Biological strand ('+' or '-')
+        reverse_complement_func: Function to reverse complement a sequence
+
+    Returns:
+        Tuple of (alt_ref_count, alt_mut_count) for alternative mutations
+    """
+    alt_ref_count = 0
+    alt_mut_count = 0
+
+    if not read.query_sequence:
+        return alt_ref_count, alt_mut_count
+
+    for query_pos, ref_pos in read.get_aligned_pairs(matches_only=True):
+        if not (region_start <= ref_pos < region_end):
+            continue
+
+        ref_base_at_pos = target_seq[ref_pos - region_start].upper()
+        query_base_at_pos = read.query_sequence[query_pos].upper()
+
+        if actual_strand == "+":
+            if ref_base_at_pos == ref_base2:
+                if query_base_at_pos == ref_base2:
+                    alt_ref_count += 1
+                elif query_base_at_pos == mut_base2:
+                    alt_mut_count += 1
+        else:  # Reverse strand
+            if ref_base_at_pos == reverse_complement_func(ref_base2):
+                query_base_revcomp = reverse_complement_func(query_base_at_pos)
+                if query_base_revcomp == ref_base2:
+                    alt_ref_count += 1
+                elif query_base_revcomp == mut_base2:
+                    alt_mut_count += 1
+
+    return alt_ref_count, alt_mut_count
+
+
+def tag_read_with_alternative_mutations(
+    read: pysam.AlignedSegment,
+    alt_ref_count: int,
+    alt_mut_count: int,
+) -> pysam.AlignedSegment:
+    """
+    Tag a read with alternative mutation counts (Yc, Zc) and adjust NS tag.
+
+    Assumes NS tag exists and is correct.
+
+    Args:
+        read: BAM read segment to tag
+        alt_ref_count: Count of alternative reference bases (Zc tag)
+        alt_mut_count: Count of alternative mutation bases (Yc tag)
+
+    Returns:
+        The tagged BAM read segment
+    """
+    read.set_tag("Yc", alt_mut_count, "i")
+    read.set_tag("Zc", alt_ref_count, "i")
+
+    # Assume NS tag exists and is correct
+    ns_val = read.get_tag("NS")
+    read.set_tag("NS", max(0, ns_val - alt_mut_count), "i")
+    
+    return read
+
+
 def count_alternative_mutations(
     read: pysam.AlignedSegment,
     ref_base2: str,
