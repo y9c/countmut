@@ -144,16 +144,38 @@ def test_perbase_expr_parity_qpos(motif_data):
     bam, fa = motif_data
     for expr in ("dist5 >= 5", "dist3 >= 5", "base == 'A'", "bq >= 20"):
         rw = run_c(
-            bam, fa,
-            mode="mutation", engine="read-walk", region="chr1:1-25",
-            extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1",
-                   "--read-expr", expr],
+            bam,
+            fa,
+            mode="mutation",
+            engine="read-walk",
+            region="chr1:1-25",
+            extra=[
+                "--ref-base",
+                "C",
+                "--mut-base",
+                "T",
+                "--pad",
+                "1",
+                "--read-expr",
+                expr,
+            ],
         )
         pl = run_c(
-            bam, fa,
-            mode="mutation", engine="pileup", region="chr1:1-25",
-            extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1",
-                   "--read-expr", expr],
+            bam,
+            fa,
+            mode="mutation",
+            engine="pileup",
+            region="chr1:1-25",
+            extra=[
+                "--ref-base",
+                "C",
+                "--mut-base",
+                "T",
+                "--pad",
+                "1",
+                "--read-expr",
+                expr,
+            ],
         )
         assert rw == pl, f"per-base qpos expr diverged between engines: {expr!r}"
 
@@ -456,3 +478,91 @@ def test_expr_file_like_usage(motif_data, tmp_path):
     assert rows
     for r in rows:
         assert r[1] in (2, 6)  # only C-reference sites
+
+
+def test_long_run_of_bang_operator(tmp_path):
+    """A long run of unary '!' must not overflow the expression translator
+    ('!' expands to 'not ', a 4x buffer-size bound)."""
+    bam, fa = _write_reference_read_bam(tmp_path, "chrX", 200)
+    expr = "!" * 64 + " (mapq >= 0)"
+    _h, rows = run_c(
+        bam,
+        fa,
+        mode="mutation",
+        engine="read-walk",
+        region="chrX:1-200",
+        extra=["--ref-base", "A", "--mut-base", "C", "--read-expr", expr],
+    )
+    assert rows, "unary-bang expression did not evaluate (overflow/regression)"
+
+
+def test_long_read_seq_not_truncated(tmp_path):
+    """seq/qual must span the whole read (>1023 bp), not a fixed 1024 buffer."""
+    root = str(tmp_path / "lr")
+    os.makedirs(root, exist_ok=True)
+    fa = os.path.join(root, "ref.fa")
+    bam = os.path.join(root, "long.bam")
+    with open(fa, "w") as f:
+        f.write(">chrL\n" + "AAACCCGGGTTT" * 30 + "\n")
+    pysam.faidx(fa)
+    hdr = pysam.AlignmentHeader.from_dict(
+        {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chrL", "LN": 400}]}
+    )
+    r = pysam.AlignedSegment(hdr)
+    r.query_name = "lr1"
+    r.flag = 0
+    r.reference_id = 0
+    r.reference_start = 0
+    r.mapping_quality = 60
+    r.query_sequence = "A" * 2000  # 2000 bp read
+    r.query_qualities = [40] * 2000
+    r.cigar = [(0, 2000)]
+    with pysam.AlignmentFile(bam, "wb", header=hdr) as out:
+        out.write(r)
+    pysam.index(bam)
+    _h, rows = run_c(
+        bam,
+        fa,
+        mode="mutation",
+        engine="read-walk",
+        region="chrL:1-200",
+        extra=[
+            "--ref-base",
+            "A",
+            "--mut-base",
+            "C",
+            "--read-expr",
+            "slen(seq) == 2000",
+        ],
+    )
+    assert rows, "seq was truncated (slen(seq) != 2000) for a 2000 bp read"
+
+
+def _write_reference_read_bam(tmp_path, chrom, length):
+    """Build a tiny single-read BAM on a uniform (all-A) reference."""
+    root = str(tmp_path / "ref_read")
+    os.makedirs(root, exist_ok=True)
+    fa = os.path.join(root, "ref.fa")
+    bam = os.path.join(root, "in.bam")
+    with open(fa, "w") as f:
+        f.write(f">{chrom}\n" + "A" * (length + 100) + "\n")
+    pysam.faidx(fa)
+    hdr = pysam.AlignmentHeader.from_dict(
+        {
+            "HD": {"VN": "1.6", "SO": "coordinate"},
+            "SQ": [{"SN": chrom, "LN": length + 100}],
+        }
+    )
+    r = pysam.AlignedSegment(hdr)
+    r.query_name = "r1"
+    r.flag = 0
+    r.reference_id = 0
+    r.reference_start = 0
+    r.mapping_quality = 60
+    r.query_sequence = "A" * min(100, length)
+    r.query_qualities = [40] * min(100, length)
+    r.cigar = [(0, min(100, length))]
+    with pysam.AlignmentFile(bam, "wb", header=hdr) as out:
+        out.write(r)
+    pysam.index(bam)
+    return bam, fa

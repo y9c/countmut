@@ -100,8 +100,8 @@ static int base_to_index(char c) {
 
 /* read-level filters (samtools reqflags/exclflags + mapq + NS + bisulfite tags) */
 static int read_fails(const cm_config *cfg, const bam1_t *b) {
-    if (cfg->req_flags && (b->core.flag & cfg->req_flags) != cfg->req_flags) return 1;
-    if (cfg->excl_flags && (b->core.flag & cfg->excl_flags)) return 1;
+    if (cfg->req_flags && (b->core.flag & (uint32_t)cfg->req_flags) != (uint32_t)cfg->req_flags) return 1;
+    if (cfg->excl_flags && (b->core.flag & (uint32_t)cfg->excl_flags)) return 1;
     if ((int)b->core.qual < cfg->min_mapq) return 1;
     if (cfg->max_sub >= 0) {
         uint8_t *aux = bam_aux_get(b, "NS");

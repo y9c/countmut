@@ -12,6 +12,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <regex.h>
+#include <alloca.h>
 
 #include "countmut_expr.h"
 #include <lua.h>
@@ -189,7 +190,7 @@ static int l_pow (lua_State *L) {
 static void ref_span(const bam1_t *b, int *rlen) {
     int r = 0;
     const uint32_t *cig = bam_get_cigar(b);
-    for (int i = 0; i < b->core.n_cigar; ++i) {
+    for (uint32_t i = 0; i < b->core.n_cigar; ++i) {
         int op = (int)bam_cigar_op(cig[i]);
         if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8)
             r += (int)bam_cigar_oplen(cig[i]);
@@ -203,7 +204,7 @@ static void cigar_stats(const bam1_t *b, int *sclen, int *hclen, int *n_indel,
                         int *soft5, int *soft3) {
     int sc = 0, hc = 0, ni = 0, s5 = 0, s3 = 0;
     const uint32_t *cig = bam_get_cigar(b);
-    for (int i = 0; i < b->core.n_cigar; ++i) {
+    for (uint32_t i = 0; i < b->core.n_cigar; ++i) {
         int op = (int)bam_cigar_op(cig[i]);
         int len = (int)bam_cigar_oplen(cig[i]);
         switch (op) {
@@ -329,7 +330,9 @@ static char *translate_ops(const char *src0) {
     char *src = translate_regex(src0);
     if (src == NULL) return NULL;
     size_t n = strlen(src);
-    char *out = (char *)malloc(2 * n + 64);
+    /* `!` -> "not " is a 4x expansion; `[XX]` -> tag('XX') ~1.8x and `&&`->"and "
+     * 2x, so 4n (not 2n) is the safe bound for pathological expressions. */
+    char *out = (char *)malloc(4 * n + 64);
     if (out == NULL) { free(src); return NULL; }
     size_t j = 0;
     char quote = 0;
@@ -600,10 +603,18 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
     if (x->need_rlen || x->need_endpos) ref_span(b, &rlen);
     int sclen = 0, hclen = 0, n_indel = 0, soft5 = 0, soft3 = 0;
     if (x->need_cigar) cigar_stats(b, &sclen, &hclen, &n_indel, &soft5, &soft3);
-    char seqbuf[1024], basec[2] = {'?', 0};
+    /* seq/qual buffers must fit the whole read (reads can exceed 1 kb, e.g.
+     * long-read sequencing); alloca is per-frame so no accumulation. */
     const char *seq = "";
+    char basec[2] = {'?', 0};
+    char *strbuf = NULL;
+    if (x->need_seq || x->need_base || x->need_qual) {
+        size_t sb = (size_t)lq + 1;
+        if (sb < 128) sb = 128;
+        strbuf = (sb <= (1u << 20)) ? (char *)alloca(sb) : (char *)malloc(sb);
+    }
     if (x->need_seq || x->need_base) {
-        seq = read_seq_str(b, seqbuf, sizeof(seqbuf));
+        seq = read_seq_str(b, strbuf, (size_t)lq + 1);
         if (x->need_base && qpos >= 0 && (size_t)qpos < (size_t)lq) basec[0] = seq[qpos];
     }
     char refc[2] = { ref_base ? ref_base : 'N', 0 };
@@ -623,12 +634,13 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
         r_str(x, "sequence", seq);
     }
     if (x->need_qual) {
-        char *qb = seqbuf;           /* reuse the buffer */
-        size_t qn = (size_t)lq;
-        if (qn > 1023) qn = 1023;
-        for (size_t z = 0; z < qn; ++z) qb[z] = (char)bam_get_qual(b)[z];
-        qb[qn] = 0;
-        r_str(x, "qual", qb);
+        if (!strbuf) {
+            size_t sb = (size_t)lq + 1;
+            strbuf = (sb <= (1u << 20)) ? (char *)alloca(sb) : (char *)malloc(sb);
+        }
+        for (size_t z = 0; z < (size_t)lq; ++z) strbuf[z] = (char)bam_get_qual(b)[z];
+        strbuf[(size_t)lq] = 0;
+        r_str(x, "qual", strbuf);
     }
     if (x->need_library) {
         uint8_t *lb = bam_aux_get(b, "LB");
@@ -680,6 +692,7 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
         r_int(x, "DIST3", dist3);
     }
 
+    if (strbuf && (size_t)lq + 1 > (1u << 20)) free(strbuf);  /* heap fallback */
     return run_chunk(L, x->read_ref);
 }
 
