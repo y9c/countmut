@@ -146,10 +146,16 @@ def _resolve_auto(
     "-t", "--threads", type=int, default=None, help="Worker threads (default: auto)"
 )
 @click.option(
-    "--ref-base", default=None, show_default=False, help="Reference base to count from (mutation view)"
+    "--ref-base",
+    default=None,
+    show_default=False,
+    help="Reference base to count from (mutation view)",
 )
 @click.option(
-    "--mut-base", default=None, show_default=False, help="Mutation base to count (mutation view)"
+    "--mut-base",
+    default=None,
+    show_default=False,
+    help="Mutation base to count (mutation view)",
 )
 @click.option(
     "--pad", type=int, default=15, show_default=True, help="Motif half-window"
