@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-08-30
+
+### Performance (results unchanged -- byte-identical output, no logic change)
+- **read-walk engine**: indel-free reads jump straight to the (sorted) target
+  positions instead of walking every aligned base; the `(pos,qname)` overlap
+  dedup now keys on integer qname ids (one copy per unique qname instead of a
+  `strdup` per entry) and uses a single hash probe per base.
+- **read-level filter memoization**: the NS/Zf/Yf checks are computed once per
+  read in the pileup engine (was: once per read per pileup position).
+- Reference sequence pre-uppercased once per contig (removes per-base
+  `toupper`); the mutation motif window is built once per site instead of once
+  per strand.
+- Benchmark (500 kb chr, 40x, 200k reads), median of 3:
+  - mutation: **0.64s -> 0.36s (1.8x)** single-thread, 0.108s -> 0.072s (8 thr)
+  - base: **0.82s -> 0.69s (1.2x)** single-thread.
+- Verified byte-identical to the previous binary on mutation/base/allele,
+  1 & 8 threads, with and without `-e`/`-p`, plus the full regression suite and
+  the cpup / legacy countmut external comparisons.
+
 ## [0.1.2] - 2026-08-30
 
 ### Changed

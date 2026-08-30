@@ -117,6 +117,18 @@ static int read_bam(void *data, bam1_t *b) {
 
 KHASH_INIT(qn, char *, int, 1, kh_str_hash_func, kh_str_hash_equal)
 
+/* read-filter memo: (ref_start, qname) -> pass/fail, so read_fails() is
+ * computed once per read instead of once per pileup position. */
+typedef struct { int64_t pos; const char *qn; } rf_key;
+static inline khint_t rf_hash(rf_key k) {
+    return kh_int64_hash_func(k.pos) ^ kh_str_hash_func(k.qn);
+}
+static inline int rf_equal(rf_key a, rf_key b) {
+    return a.pos == b.pos && strcmp(a.qn, b.qn) == 0;
+}
+KHASH_INIT(rfc, rf_key, int, 1, rf_hash, rf_equal)
+#define RF_CAP (1 << 15)
+
 /* BED / position-list region support (from bedidx.c, mirrors minipileup) */
 void *bed_read(const char *fn);
 int bed_overlap(const void *_h, const char *chr, int beg, int end);
@@ -131,6 +143,7 @@ typedef struct {
     BGZF *fp; hts_idx_t *idx; faidx_t *fai;
     void *inc_bed, *exc_bed;
     cm_expr *expr;   /* Lua -e / -p filters (NULL when none) */
+    khash_t(rfc) *rfc; /* read_fails memo (pileup engine) */
 } worker_t;
 
 static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
@@ -147,6 +160,7 @@ static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
     w->inc_bed = bedfile ? bed_read(bedfile) : NULL;
     w->exc_bed = exclude ? bed_read(exclude) : NULL;
     w->expr = cm_expr_new(read_expr, pile_expr);
+    w->rfc = kh_init(rfc);
 }
 
 static void worker_free(worker_t *w) {
@@ -163,6 +177,35 @@ static void worker_free(worker_t *w) {
     if (w->idx) hts_idx_destroy(w->idx);
     if (w->fp) bgzf_close(w->fp);
     cm_expr_free(w->expr);
+    if (w->rfc) {
+        for (khint_t k = kh_begin(w->rfc); k != kh_end(w->rfc); ++k)
+            if (kh_exist(w->rfc, k)) free((void *)(uintptr_t)kh_key(w->rfc, k).qn);
+        kh_destroy(rfc, w->rfc);
+    }
+}
+
+/* read_fails() memoized by (ref_start, qname).  Only used when an aux-tag
+ * filter (NS / Zf / Yf) is active -- otherwise read_fails() is cheap and the
+ * cache would only add overhead.  The cached value is exactly read_fails() for
+ * that same read, so input->output semantics are unchanged. */
+#define read_fails_cached(w, cfg, b) \
+    (((cfg)->max_sub < 0 && (cfg)->max_unc < 0 && (cfg)->min_con < 0) ? \
+        read_fails(cfg, b) : _read_fails_cached(w, cfg, b))
+
+static int _read_fails_cached(worker_t *w, const cm_config *cfg, const bam1_t *b) {
+    rf_key key = { b->core.pos, bam_get_qname(b) };
+    khint_t k = kh_get(rfc, w->rfc, key);
+    if (k != kh_end(w->rfc)) return kh_val(w->rfc, k);
+    int fails = read_fails(cfg, b);
+    if (kh_size(w->rfc) >= RF_CAP) {
+        for (khint_t it = kh_begin(w->rfc); it != kh_end(w->rfc); ++it)
+            if (kh_exist(w->rfc, it)) free((void *)(uintptr_t)kh_key(w->rfc, it).qn);
+        kh_clear(rfc, w->rfc);
+    }
+    int ret; k = kh_put(rfc, w->rfc, key, &ret);
+    if (ret) kh_key(w->rfc, k).qn = strdup(bam_get_qname(b));
+    kh_val(w->rfc, k) = fails;
+    return fails;
 }
 
 typedef struct { int tid, beg, end; } region_t;
@@ -208,6 +251,7 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
     if (cfg->mode == CM_MODE_MUTATION) {
         int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
         int mlen = cfg->pad * 2 + 1;
+        int motif_ready = 0;   /* build the reference-forward window once */
         for (int s = 0; s < 2; ++s) {
             if (s == 0 && !emit_plus) continue;
             if (s == 1 && !emit_minus) continue;
@@ -218,15 +262,17 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
             int o1 = site->cnt[s][1][0]+site->cnt[s][1][1]+site->cnt[s][1][2]+site->cnt[s][1][3]+site->cnt[s][1][4]-u1-m1;
             int o2 = site->cnt[s][2][0]+site->cnt[s][2][1]+site->cnt[s][2][2]+site->cnt[s][2][3]+site->cnt[s][2][4]-u2-m2;
             if (u1 + m1 + u2 + m2 <= 0) continue;
-            for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2) {
-                w->motif_buf[k2 - ((int)pos - cfg->pad)] =
-                    (k2 < 0 || k2 >= w->chr_len) ? 'N'
-                    : (char)toupper((unsigned char)w->chr_seq[k2]);
+            if (!motif_ready) {
+                /* Reference-forward window for BOTH strands (bases are counted
+                 * reference-forward), built at most once per site. */
+                for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2) {
+                    w->motif_buf[k2 - ((int)pos - cfg->pad)] =
+                        (k2 < 0 || k2 >= w->chr_len) ? 'N'
+                        : (char)toupper((unsigned char)w->chr_seq[k2]);
+                }
+                w->motif_buf[mlen] = 0;
+                motif_ready = 1;
             }
-            w->motif_buf[mlen] = 0;
-            /* Counted bases are reference-forward (stored SEQ), so the motif is
-             * the reference-forward window for BOTH strands (see note in the
-             * Python engines). */
             fprintf(fp, "%s\t%d\t%c\t%s\t%d\t%d\t%d\t%d\t%d\t%d",
                     hdr->target_name[tid], (int)pos + 1, s ? '-' : '+', w->motif_buf,
                     u0, u1, u2, m0, m1, m2);
@@ -315,6 +361,17 @@ static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
     return cm_expr_pile(x, pos, ref_ch, motif, cnt, ins, del, rs, fl);
 }
 
+/* Fetch + uppercase the chromosome sequence once per tid (instead of calling
+ * toupper() on every per-base / per-position access).  Output is unchanged. */
+static void load_chr_seq(worker_t *w, bam_hdr_t *hdr, int tid) {
+    if (w->chr_seq) free(w->chr_seq);
+    w->chr_seq = fai_fetch(w->fai, hdr->target_name[tid], &w->chr_len);
+    w->last_tid = tid;
+    if (w->chr_seq)
+        for (int i = 0; i < w->chr_len; ++i)
+            w->chr_seq[i] = (char)toupper((unsigned char)w->chr_seq[i]);
+}
+
 /* Count one interval [beg,end) of `tid` and write rows to fp. */
 static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *fp, int tid, int beg, int end) {
     aux_t aux;
@@ -331,20 +388,16 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
     site_t site;
     while (bam_mplp_auto(mplp, &tid, &pos, n_plp, plp) > 0) {
         if (pos < beg || pos >= end) continue;
-        if (w->last_tid != tid) {
-            if (w->chr_seq) free(w->chr_seq);
-            w->chr_seq = fai_fetch(w->fai, hdr->target_name[tid], &w->chr_len);
-            w->last_tid = tid;
-        }
+        if (w->last_tid != tid) load_chr_seq(w, hdr, tid);
         if (w->chr_len == 0 || pos >= w->chr_len) continue;
         /* BED region restriction (pbr -b include / -x exclude) */
         if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], pos, pos + 1)) continue;
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], pos, pos + 1)) continue;
         const int n = n_plp[0];
         if (n == 0) continue;
-        const char ref_ch = (char)toupper((unsigned char)w->chr_seq[pos]);
+        const char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
 
-        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && toupper((unsigned char)ref_ch) != cfg->ref_base)
+        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && ref_ch != cfg->ref_base)
             continue;
 
         if (n > w->sel_cap) {
@@ -363,7 +416,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             int s = bio_strand(b);
             if (cfg->strand_process == CM_STRAND_FORWARD && s != 0) continue;
             if (cfg->strand_process == CM_STRAND_REVERSE && s != 1) continue;
-            if (read_fails(cfg, b)) { site.fail[s]++; continue; }
+            if (read_fails_cached(w, cfg, b)) { site.fail[s]++; continue; }
             if (p->is_refskip) { site.refskip[s]++; continue; }
             if (p->is_del) { site.del[s]++; continue; }
             if (p->qpos < 0 || p->qpos >= b->core.l_qseq) continue;
@@ -435,15 +488,18 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
  * pileup engine, so the two walks are byte-identical.
  * ======================================================================== */
 
-/* dedup hash: (0-based pos, qname) -> index into the winner array */
-typedef struct { int64_t pos; const char *qn; } posq_key;
+/* dedup hash: (0-based pos, qname-id) -> index into the winner array.
+ * qname ids come from a per-region qname->id table, so the (pos,qname) overlap
+ * dedup is unchanged but keys are plain integers (no strdup per entry). */
+typedef struct { int64_t pos; int qid; } posq_key;
 static inline khint_t posq_hash(posq_key k) {
-    return kh_int64_hash_func(k.pos) ^ kh_str_hash_func(k.qn);
+    return kh_int64_hash_func(k.pos) ^ (khint_t)k.qid;
 }
 static inline int posq_equal(posq_key a, posq_key b) {
-    return a.pos == b.pos && strcmp(a.qn, b.qn) == 0;
+    return a.pos == b.pos && a.qid == b.qid;
 }
 KHASH_INIT(posq, posq_key, int, 1, posq_hash, posq_equal)
+KHASH_INIT(qn2id, char *, int, 1, kh_str_hash_func, kh_str_hash_equal)
 
 /* pos -> sitemap slot */
 KHASH_INIT(posi, khint64_t, int, 1, kh_int64_hash_func, kh_int64_hash_equal)
@@ -490,19 +546,114 @@ static int cmp_site_ord(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
+/* ---- read-walk fast-path helpers -------------------------------------------
+ * The slow path walks every aligned base; for indel-free reads the fast path
+ * jumps straight to the (sorted) target positions.  Both funnel into
+ * rw_add_base(), so dedup/quality decisions are byte-identical. */
+
+static uint32_t cigar_ref_len(const bam1_t *b) {
+    const uint32_t *cig = bam_get_cigar(b);
+    uint32_t r = 0;
+    for (int i = 0; i < b->core.n_cigar; ++i) {
+        int op = (int)bam_cigar_op(cig[i]);
+        if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8)
+            r += (uint32_t)bam_cigar_oplen(cig[i]);
+    }
+    return r;
+}
+static int cigar_has_indels(const bam1_t *b) {
+    const uint32_t *cig = bam_get_cigar(b);
+    for (int i = 0; i < b->core.n_cigar; ++i) {
+        int op = (int)bam_cigar_op(cig[i]);
+        if (op == 1 || op == 2 || op == 3) return 1;
+    }
+    return 0;
+}
+static uint32_t cigar_leading_softclips(const bam1_t *b) {
+    const uint32_t *cig = bam_get_cigar(b);
+    uint32_t sc = 0;
+    for (int i = 0; i < b->core.n_cigar; ++i) {
+        int op = (int)bam_cigar_op(cig[i]);
+        if (op == 4) sc += (uint32_t)bam_cigar_oplen(cig[i]);
+        else break;   /* soft-clips only at the 5' end before the first M */
+    }
+    return sc;
+}
+static int tgt_lower_bound(const int *a, int n, int v) {
+    int lo = 0, hi = n;
+    while (lo < hi) { int mid = (lo + hi) >> 1; if (a[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo;
+}
+
+/* Add one matched base to the (pos,qname) dedup table.  Applies the mutation
+ * target gate (skipped when `already_target`), trim (is_internal), the -e
+ * filter and the (mapq,read1,qual) preference exactly like the per-base slow
+ * path.  `qid` is the read's qname id (resolved once per read).  Returns the
+ * (possibly reallocated) wins array. */
+static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int tid,
+                         const bam1_t *b, int s, int64_t ref_pos, uint32_t qpos,
+                         int qid, int already_target,
+                         khash_t(posq) *h, rw_w *wins, int *wins_cap, int *wins_n) {
+    uint32_t qlen = b->core.l_qseq;
+    if (qpos >= qlen) return wins;
+    if (!already_target && cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
+        if (ref_pos >= w->chr_len || w->chr_seq[ref_pos] != cfg->ref_base) return wins;
+    }
+    if (s == 0) {
+        if ((int)qpos < cfg->trim_start || (int)qlen - (int)qpos <= cfg->trim_end) return wins;
+    } else {
+        if ((int)qpos < cfg->trim_end || (int)qlen - (int)qpos <= cfg->trim_start) return wins;
+    }
+    if (w->expr && cm_expr_has_read(w->expr)
+        && !cm_expr_read(w->expr, b, hdr->target_name[tid], (int)qpos, s ? -1 : 1))
+        return wins;
+    uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
+    int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
+    int qual = (int)bam_get_qual(b)[qpos];
+    int mapq = (int)b->core.qual;
+    int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
+    posq_key key = { ref_pos, qid };
+    int r;
+    khint_t kh = kh_put(posq, h, key, &r);
+    if (r) {   /* new (pos,qname) */
+        if (*wins_n == *wins_cap) {
+            *wins_cap = *wins_cap ? *wins_cap * 2 : 64;
+            wins = (rw_w *)realloc(wins, (size_t)*wins_cap * sizeof(rw_w));
+        }
+        int idx = (*wins_n)++;
+        wins[idx].mapq = mapq; wins[idx].r1 = r1; wins[idx].qual = qual;
+        wins[idx].strand = s; wins[idx].base = base_i;
+        kh_val(h, kh) = idx;
+    } else {
+        int j = kh_val(h, kh);
+        if (better(mapq, r1, qual, wins[j].mapq, wins[j].r1, wins[j].qual)) {
+            wins[j].mapq = mapq; wins[j].r1 = r1; wins[j].qual = qual;
+            wins[j].strand = s; wins[j].base = base_i;
+        }
+    }
+    return wins;
+}
+
 static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr,
                                     FILE *fp, int tid, int beg, int end) {
     aux_t aux;
     aux.fp = w->fp; aux.beg = beg; aux.end = end;
     aux.itr = w->idx ? bam_itr_queryi(w->idx, tid, beg, end) : NULL;
 
-    if (w->last_tid != tid) {
-        if (w->chr_seq) free(w->chr_seq);
-        w->chr_seq = fai_fetch(w->fai, hdr->target_name[tid], &w->chr_len);
-        w->last_tid = tid;
+    if (w->last_tid != tid) load_chr_seq(w, hdr, tid);
+
+    /* sorted target positions (mutation mode) for the indel-free fast path */
+    int *tgt = NULL; int tgt_n = 0;
+    if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && end > beg) {
+        tgt = (int *)malloc((size_t)(end - beg) * sizeof(int));
+        for (int p = beg; p < end && p < w->chr_len; ++p)
+            if (w->chr_seq[p] == (char)cfg->ref_base)
+                tgt[tgt_n++] = p;
     }
 
     khash_t(posq) *h = kh_init(posq);
+    khash_t(qn2id) *qnids = kh_init(qn2id);
+    int qname_n = 0;
     rw_w *wins = NULL; int wins_cap = 0, wins_n = 0;
     sitemap_t sm; sm_init(&sm);
 
@@ -524,7 +675,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                         int64_t hi = rcur + len < end ? rcur + len : end;
                         if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
                             for (int64_t p = lo; p < hi; ++p)
-                                if ((int)p < w->chr_len && (char)toupper((unsigned char)w->chr_seq[p]) == cfg->ref_base)
+                                if ((int)p < w->chr_len && w->chr_seq[p] == cfg->ref_base)
                                     sm_get(&sm, p)->fail[s]++;
                         } else {
                             for (int64_t p = lo; p < hi; ++p)
@@ -537,80 +688,73 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
             continue;
         }
 
-        const char *qn = bam_get_qname(b);
-        int mapq = (int)b->core.qual;
-        int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
         uint32_t qlen = b->core.l_qseq;
         if (qlen == 0) continue;
+        const char *qnbuf = bam_get_qname(b);
+        khint_t qk = kh_get(qn2id, qnids, qnbuf);
+        int qid;
+        if (qk == kh_end(qnids)) {
+            int r; char *cp = strdup(qnbuf); qk = kh_put(qn2id, qnids, cp, &r);
+            qid = qname_n++; kh_val(qnids, qk) = qid;
+        } else {
+            qid = kh_val(qnids, qk);
+        }
         const uint32_t *cig = bam_get_cigar(b);
-        uint32_t qcur = 0;
-        int64_t rcur = b->core.pos;
-        for (int i = 0; i < b->core.n_cigar; ++i) {
-            int op = (int)bam_cigar_op(cig[i]); int len = (int)bam_cigar_oplen(cig[i]);
-            switch (op) {
-            case 0: case 7: case 8: /* M, =, X -- matched bases */
-                for (int k = 0; k < len; ++k) {
-                    int64_t ref_pos = rcur + k;
-                    if (ref_pos < beg || ref_pos >= end) continue;
-                    uint32_t qpos = qcur + (uint32_t)k;
-                    if (qpos >= qlen) break;
-                    if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
-                        if (ref_pos >= w->chr_len || (char)toupper((unsigned char)w->chr_seq[ref_pos]) != cfg->ref_base) continue;
-                    }
-                    int internal = (s == 0)
-                        ? ((int)qpos >= cfg->trim_start && (int)qlen - (int)qpos > cfg->trim_end)
-                        : ((int)qpos >= cfg->trim_end && (int)qlen - (int)qpos > cfg->trim_start);
-                    if (!internal) continue;
-                    /* -e read filter (per aligned base; same spot as pileup/Python) */
-                    if (w->expr && cm_expr_has_read(w->expr)
-                        && !cm_expr_read(w->expr, b, hdr->target_name[tid], (int)qpos, s ? -1 : 1))
-                        continue;
-                    uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
-                    int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
-                    int qual = (int)bam_get_qual(b)[qpos];
-                    posq_key key = { ref_pos, qn };
-                    khint_t kh = kh_get(posq, h, key);
-                    if (kh == kh_end(h)) {
-                        int r; kh = kh_put(posq, h, key, &r);
-                        kh_key(h, kh).qn = strdup(qn);
-                        if (wins_n == wins_cap) {
-                            wins_cap = wins_cap ? wins_cap * 2 : 64;
-                            wins = (rw_w *)realloc(wins, (size_t)wins_cap * sizeof(rw_w));
-                        }
-                        int idx = wins_n++;
-                        wins[idx].mapq = mapq; wins[idx].r1 = r1; wins[idx].qual = qual;
-                        wins[idx].strand = s; wins[idx].base = base_i;
-                        kh_val(h, kh) = idx;
-                    } else {
-                        int j = kh_val(h, kh);
-                        if (better(mapq, r1, qual, wins[j].mapq, wins[j].r1, wins[j].qual)) {
-                            wins[j].mapq = mapq; wins[j].r1 = r1; wins[j].qual = qual;
-                            wins[j].strand = s; wins[j].base = base_i;
-                        }
-                    }
-                }
-                qcur += (uint32_t)len; rcur += len;
-                break;
-            case 1: case 4: qcur += (uint32_t)len; break; /* I, S consume query */
-            case 2: case 3: { /* D, N -- deletion / ref-skip */
-                int is_del = (op == 2);
-                if (rcur < end && rcur + len > beg) {
-                    int64_t lo = rcur > beg ? rcur : beg;
-                    int64_t hi = rcur + len < end ? rcur + len : end;
-                    if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
-                        for (int64_t p = lo; p < hi; ++p)
-                            if ((int)p < w->chr_len && (char)toupper((unsigned char)w->chr_seq[p]) == cfg->ref_base) {
-                                if (is_del) sm_get(&sm, p)->del[s]++; else sm_get(&sm, p)->refskip[s]++;
-                            }
-                    } else {
-                        for (int64_t p = lo; p < hi; ++p)
-                            if (is_del) sm_get(&sm, p)->del[s]++; else sm_get(&sm, p)->refskip[s]++;
-                    }
-                }
-                rcur += len;
-                break;
+
+        if (tgt && !cigar_has_indels(b)) {
+            /* fast path: indel-free read -> jump straight to target positions */
+            int64_t r_start = b->core.pos;
+            uint32_t sc = cigar_leading_softclips(b);
+            int64_t r_end = r_start + (int64_t)cigar_ref_len(b);
+            int64_t lo = r_start > beg ? r_start : beg;
+            int64_t hi = r_end < end ? r_end : end;
+            for (int ti = tgt_lower_bound(tgt, tgt_n, (int)lo); ti < tgt_n; ++ti) {
+                int64_t ref_pos = tgt[ti];
+                if (ref_pos >= hi) break;
+                wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos,
+                                   (uint32_t)((ref_pos - r_start) + sc),
+                                   qid, 1,
+                                   h, wins, &wins_cap, &wins_n);
             }
-            default: break; /* H, P consume nothing */
+        } else {
+            uint32_t qcur = 0;
+            int64_t rcur = b->core.pos;
+            for (int i = 0; i < b->core.n_cigar; ++i) {
+                int op = (int)bam_cigar_op(cig[i]); int len = (int)bam_cigar_oplen(cig[i]);
+                switch (op) {
+                case 0: case 7: case 8: /* M, =, X -- matched bases */
+                    for (int k = 0; k < len; ++k) {
+                        int64_t ref_pos = rcur + k;
+                        if (ref_pos < beg || ref_pos >= end) continue;
+                        uint32_t qpos = qcur + (uint32_t)k;
+                        if (qpos >= qlen) break;
+                        wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
+                                           qid, 0,
+                                           h, wins, &wins_cap, &wins_n);
+                    }
+                    qcur += (uint32_t)len; rcur += len;
+                    break;
+                case 1: case 4: qcur += (uint32_t)len; break; /* I, S consume query */
+                case 2: case 3: { /* D, N -- deletion / ref-skip */
+                    int is_del = (op == 2);
+                    if (rcur < end && rcur + len > beg) {
+                        int64_t lo2 = rcur > beg ? rcur : beg;
+                        int64_t hi2 = rcur + len < end ? rcur + len : end;
+                        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
+                            for (int64_t p = lo2; p < hi2; ++p)
+                                if ((int)p < w->chr_len && w->chr_seq[p] == cfg->ref_base) {
+                                    if (is_del) sm_get(&sm, p)->del[s]++; else sm_get(&sm, p)->refskip[s]++;
+                                }
+                        } else {
+                            for (int64_t p = lo2; p < hi2; ++p)
+                                if (is_del) sm_get(&sm, p)->del[s]++; else sm_get(&sm, p)->refskip[s]++;
+                        }
+                    }
+                    rcur += len;
+                    break;
+                }
+                default: break; /* H, P consume nothing */
+                }
             }
         }
     }
@@ -635,8 +779,8 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
     for (int i = 0; i < sm.n; ++i) {
         int64_t pos = ord[i].pos;
         if (pos < 0 || pos >= w->chr_len) continue;
-        char ref_ch = (char)toupper((unsigned char)w->chr_seq[pos]);
-        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && (char)toupper((unsigned char)ref_ch) != cfg->ref_base) continue;
+        char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
+        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && ref_ch != cfg->ref_base) continue;
         if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         /* -p site filter */
@@ -647,11 +791,13 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
     }
 
     /* cleanup */
-    for (khint_t k = kh_begin(h); k != kh_end(h); ++k)
-        if (kh_exist(h, k)) free((void *)(uintptr_t)kh_key(h, k).qn);
+    for (khint_t k = kh_begin(qnids); k != kh_end(qnids); ++k)
+        if (kh_exist(qnids, k)) free((void *)(uintptr_t)kh_key(qnids, k));
+    kh_destroy(qn2id, qnids);
     kh_destroy(posq, h);
     free(wins);
     free(ord);
+    free(tgt);
     sm_free(&sm);
     bam_destroy1(b);
     if (aux.itr) bam_itr_destroy(aux.itr);

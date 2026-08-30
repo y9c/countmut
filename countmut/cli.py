@@ -26,7 +26,7 @@ from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 try:
     __version__ = importlib_metadata.version("countmut")
 except importlib_metadata.PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.2"
+    __version__ = "0.1.3"
 
 click.rich_click.TEXT_MARKUP = "rich"
 click.rich_click.SHOW_ARGUMENTS = True
