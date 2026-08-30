@@ -49,24 +49,6 @@ static int nt16_index(uint8_t b) {
     }
 }
 
-static char comp_base(char c) {
-    switch (toupper((unsigned char)c)) {
-    case 'A': return 'T';
-    case 'T':
-    case 'U': return 'A';
-    case 'C': return 'G';
-    case 'G': return 'C';
-    default: return 'N';
-    }
-}
-
-static char *revcomp(const char *s, int len) {
-    char *out = (char *)malloc(len + 1);
-    for (int i = 0; i < len; ++i) out[i] = comp_base(s[len - 1 - i]);
-    out[len] = 0;
-    return out;
-}
-
 /* biological strand: 0 = '+', 1 = '-' */
 static int bio_strand(const bam1_t *b) {
     int rev = bam_is_rev(b);
@@ -325,15 +307,13 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
                         (k2 < 0 || k2 >= w->chr_len) ? 'N' : (char)toupper((unsigned char)w->chr_seq[k2]);
                 }
                 w->motif_buf[mlen] = 0;
-                if (s == 1) {
-                    char *rc = revcomp(w->motif_buf, mlen);
-                    fprintf(fp, "%s\t%d\t-\t%s\t%d\t%d\t%d\t%d\t%d\t%d",
-                            hdr->target_name[tid], pos + 1, rc, u0, u1, u2, m0, m1, m2);
-                    free(rc);
-                } else {
-                    fprintf(fp, "%s\t%d\t+\t%s\t%d\t%d\t%d\t%d\t%d\t%d",
-                            hdr->target_name[tid], pos + 1, w->motif_buf, u0, u1, u2, m0, m1, m2);
-                }
+                /* The counted bases are reference-forward (stored SEQ), so the
+                 * motif is the reference-forward window for BOTH strands (no
+                 * reverse complement for '-').  This keeps u/m consistent with
+                 * the bases we count and matches the Python engines. */
+                fprintf(fp, "%s\t%d\t%c\t%s\t%d\t%d\t%d\t%d\t%d\t%d",
+                        hdr->target_name[tid], pos + 1, s ? '-' : '+', w->motif_buf,
+                        u0, u1, u2, m0, m1, m2);
                 if (cfg->save_rest) fprintf(fp, "\t%d\t%d\t%d", o0, o1, o2);
                 fputc('\n', fp);
             }
@@ -345,6 +325,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
                     int dep = site.cnt[s][0][0]+site.cnt[s][0][1]+site.cnt[s][0][2]+site.cnt[s][0][3]+site.cnt[s][0][4];
                     int t_ins = site.ins[s], t_del = site.del[s], t_rs = site.refskip[s], t_fl = site.fail[s];
                     if (dep + t_rs + t_del + t_ins + t_fl == 0) continue;
+                    if (cfg->min_depth > 0 && dep < cfg->min_depth) continue;
                     fprintf(fp, "%s\t%d\t%c\t%c\t%d\t%d\t%d\t%d\t%d\t%d",
                             hdr->target_name[tid], pos + 1, s ? '-' : '+', ref_ch, dep,
                             site.cnt[s][0][0], site.cnt[s][0][1], site.cnt[s][0][2],
@@ -420,6 +401,10 @@ static region_t *build_regions(bam_hdr_t *hdr, int threads, const char *region, 
         s = strchr(chr, ':');
         if (!s) return NULL;
         *s = 0; sscanf(s + 1, "%ld-%ld", &st, &en);
+        /* Samtools-style 1-based inclusive region: st -> 0-based start (st-1),
+         * en stays as the 0-based exclusive end.  Matches the Python wrapper. */
+        if (st > 0) --st;
+        if (st < 0) st = 0;
         int tid = bam_name2id(hdr, chr);
         if (tid < 0) return NULL;
         regs = (region_t *)malloc(sizeof(region_t)); regs[0].tid = tid; regs[0].beg = (int)st; regs[0].end = (int)en;

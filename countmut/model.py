@@ -75,7 +75,7 @@ class FilterConfig:
     trim_start: int = 2  # bases trimmed from fragment 5' end
     trim_end: int = 2  # bases trimmed from fragment 3' end
     include_flags: int = 0  # SAM flags that must be set
-    exclude_flags: int = 4 | 256 | 512  # unmapped, secondary, duplicate
+    exclude_flags: int = 1796  # UNMAP|SECONDARY|QCFAIL|DUP (samtools default)
     max_depth: int = 0  # per-position depth cap (0 = unlimited)
 
 
@@ -89,6 +89,15 @@ class MutationConfig:
     mut_base2: str | None = None
     pad: int = 15  # motif half-window
     save_rest: bool = False  # also emit o0/o1/o2 (other bases)
+
+    def __post_init__(self) -> None:
+        # Case-normalize like the C core (driver uppercases --ref-base/--mut-base).
+        self.ref_base = self.ref_base.upper()
+        self.mut_base = self.mut_base.upper()
+        if self.ref_base2 is not None:
+            self.ref_base2 = self.ref_base2.upper()
+        if self.mut_base2 is not None:
+            self.mut_base2 = self.mut_base2.upper()
 
 
 @dataclass

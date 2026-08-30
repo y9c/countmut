@@ -122,6 +122,7 @@ def _worker(args: tuple) -> dict[str, Any]:
                 _WORKER_FCFG,
                 _WORKER_MCFG,
                 mode=mode,
+                strand_process=_WORKER_SCFG.process,
                 has_bisulfite_tags=_WORKER_BISULFITE,
                 read_pred=read_pred,
                 pile_pred=pile_pred,
@@ -160,10 +161,18 @@ def _render(cols) -> list[list]:
                 split_strand=_WORKER_SCFG.split,
                 count_indels=_WORKER_ECFG.count_indels,
                 strands=strands,
+                min_depth=_WORKER_ECFG.min_depth,
             )
         )
-    # allele table
-    return list(allele_rows(cols))
+    # allele table / VCF
+    return list(
+        allele_rows(
+            cols,
+            min_support=_WORKER_ECFG.min_allele_support,
+            min_depth=_WORKER_ECFG.min_depth,
+            vcf=_WORKER_ECFG.vcf,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +308,12 @@ def run_pipeline(
 
     # ---- sort + write --------------------------------------------------------
     all_rows.sort(key=lambda r: (chrom_order.get(r[0], 1 << 30), r[1]))
-    _write(header, all_rows, output)
+    _write(
+        header,
+        all_rows,
+        output,
+        vcf=ecfg.mode == "allele" and ecfg.vcf,
+    )
     return PipelineResult(
         header=header,
         rows=all_rows,
@@ -321,17 +335,27 @@ def _header_for(mode: str, mcfg, scfg, ecfg) -> list[str]:
         if ecfg.count_indels:
             return BASE_HEADER_INDEL
         return BASE_HEADER
-    return ["chrom", "pos", "ref", "depth", "alleles_and_counts"]
+    if ecfg.vcf:
+        return [
+            "##fileformat=VCFv4.2",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+        ]
+    return ["chrom", "pos", "ref", "depth", "ref_count", "alt", "alt_count"]
 
 
-def _write(header: list[str], rows: list[list], output: str | None) -> None:
+def _write(
+    header: list[str], rows: list, output: str | None, *, vcf: bool = False
+) -> None:
+    if vcf:
+        # header holds whole VCF lines; rows are pre-rendered VCF records.
+        lines: list[str] = list(header)
+        lines += [r if isinstance(r, str) else "\t".join(map(str, r)) for r in rows]
+    else:
+        lines = ["\t".join(header), *("\t".join(map(str, r)) for r in rows)]
+    text = "\n".join(lines) + "\n"
     if output:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
         with open(output, "w") as f:
-            f.write("\t".join(header) + "\n")
-            for row in rows:
-                f.write("\t".join(map(str, row)) + "\n")
+            f.write(text)
     else:
-        sys.stdout.write("\t".join(header) + "\n")
-        for row in rows:
-            sys.stdout.write("\t".join(map(str, row)) + "\n")
+        sys.stdout.write(text)

@@ -33,8 +33,11 @@ counting difference.
    reference-forward orientation, this flips the base to the wrong residue, so
    reverse-strand contributions are dropped/mis-counted. The unified tool keeps
    `bam_seqi`/`query_sequence` as reference-forward (no complement) and reports
-   both strands. On the mixed-strand dataset legacy reported **111** sites vs **206**
-   for the unified tool (the missing 95 are reverse-strand sites).
+   both strands. To stay consistent with those reference-forward base counts the
+   motif is also rendered reference-forward for **both** strands (no reverse
+   complement on the `-` row). On the mixed-strand dataset legacy reported
+   **111** sites vs **206** for the unified tool (the missing 95 are
+   reverse-strand sites).
 
 3. **Mandatory bisulfite tags.** Legacy `get_tag("NS"/"Zf"/"Yf")` raises and
    skips the read if the tag is absent, so generic alignments produce nothing.

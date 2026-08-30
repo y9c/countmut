@@ -39,6 +39,31 @@ def _target_sites(
     return {start + i for i, b in enumerate(seq) if b.upper() == ref_base}
 
 
+def _covered_positions(read, start: int, end: int):
+    """Yield reference positions in [start,end) that ``read`` touches (any event)."""
+    for _qpos, ref_pos in read.get_aligned_pairs(matches_only=False):
+        if ref_pos is not None and start <= ref_pos < end:
+            yield ref_pos
+
+
+def _indel_positions(read, start: int, end: int):
+    """Yield (ref_pos, kind) for deletion / reference-skip bases in [start,end).
+
+    These come from the CIGAR (ops D=2, N=3).  The pileup engine tallies them
+    per-read *before* the trim / ``-e`` gates, so the read-walk engine does too.
+    """
+    ref = read.reference_start
+    for op, ln in read.cigartuples:
+        if op in (2, 3):
+            kind = "del" if op == 2 else "ref_skip"
+            lo, hi = max(ref, start), min(ref + ln, end)
+            if lo < hi:
+                for p in range(lo, hi):
+                    yield p, kind
+        if op in (0, 2, 3, 7, 8):  # consumes reference
+            ref += ln
+
+
 def readwalk_region(
     sam: pysam.AlignmentFile,
     reference: pysam.FastaFile,
@@ -67,6 +92,13 @@ def readwalk_region(
 
     # best[(pos, qname)] = (key, strand, base, qual, category)
     best: dict[tuple[int, str], tuple] = {}
+    # events[pos][strand][kind] -> count, for del/ref_skip/fail (per-read, NOT deduped)
+    events: dict[int, dict[str, dict[str, int]]] = {}
+
+    def bump(pos: int, strand: str, kind: str) -> None:
+        d = events.setdefault(pos, {}).setdefault(strand, {})
+        d[kind] = d.get(kind, 0) + 1
+
     for read in sam.fetch(chrom, start, end):
         strand = reads.actual_strand(read)
         if strand_process == "forward" and strand != "+":
@@ -74,6 +106,13 @@ def readwalk_region(
         if strand_process == "reverse" and strand != "-":
             continue
         if reads.read_fail_reason(read, fcfg, has_bisulfite_tags) is not None:
+            # Same semantics as the pileup engine / C core: a read failing the
+            # read-level filters is tallied as `fail` at EVERY reference position
+            # it covers (not deduped, contributes no base).
+            for ref_pos in _covered_positions(read, start, end):
+                if targets is not None and ref_pos not in targets:
+                    continue
+                bump(ref_pos, strand, "fail")
             continue
 
         qs = read.query_sequence
@@ -116,6 +155,12 @@ def readwalk_region(
             if cur is None or key > cur[0]:
                 best[(ref_pos, qname)] = (key, strand, base, qual, category)
 
+        # Deletions / reference-skips for this passing read (per-read, no dedup).
+        for ref_pos, kind in _indel_positions(read, start, end):
+            if targets is not None and ref_pos not in targets:
+                continue
+            bump(ref_pos, strand, kind)
+
     # Flush winners into per-position buckets.
     pos_buckets: dict[int, dict[str, dict[str, dict[str, int]]]] = {}
     for (ref_pos, qname), (_key, strand, base, qual, category) in best.items():
@@ -125,7 +170,7 @@ def readwalk_region(
         bases[base] = bases.get(base, 0) + 1
 
     columns: list[SiteColumn] = []
-    for ref_pos in sorted(pos_buckets):
+    for ref_pos in sorted(set(pos_buckets) | set(events)):
         if targets is not None and ref_pos not in targets:
             continue
         ref_base = reference.fetch(chrom, ref_pos, ref_pos + 1).upper()
@@ -138,11 +183,19 @@ def readwalk_region(
         if is_mutation:
             idx = ref_pos - start + pad
             col.motif = ext_seq[idx - pad : idx + pad + 1]
-        for category, strands in pos_buckets[ref_pos].items():
+        for category, strands in pos_buckets.get(ref_pos, {}).items():
             for strand, bases in strands.items():
                 for base, count in bases.items():
                     for _ in range(count):
                         col.add_observation(strand, base, category)
+        for strand, kinds in events.get(ref_pos, {}).items():
+            for kind, count in kinds.items():
+                if kind == "fail":
+                    col.add_fail(strand, count)
+                elif kind == "del":
+                    col.add_indel(strand, "del", count)
+                elif kind == "ref_skip":
+                    col.add_ref_skip(strand, count)
         if pile_pred is not None and not pile_pred(col):
             continue
         columns.append(col)

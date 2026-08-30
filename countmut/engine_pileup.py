@@ -56,6 +56,7 @@ def pileup_region(
     fcfg: FilterConfig,
     mcfg: MutationConfig | None = None,
     mode: str = "mutation",
+    strand_process: str = "both",
     has_bisulfite_tags: bool = False,
     read_pred=None,  # optional per-base read predicate (-e)
     pile_pred=None,  # optional per-site pileup predicate (-p)
@@ -111,6 +112,13 @@ def pileup_region(
         for pr in p.pileups:
             rec = pr.alignment
             strand = reads.actual_strand(rec)
+            # Same strand gate as engine_readwalk / the C core: a read of the
+            # wrong biological strand is skipped entirely (not even a fail),
+            # so per-strand depth matches read-walk / C output.
+            if strand_process == "forward" and strand != "+":
+                continue
+            if strand_process == "reverse" and strand != "-":
+                continue
             if reads.read_fail_reason(rec, fcfg, has_bisulfite_tags) is not None:
                 col.add_fail(strand)
                 continue

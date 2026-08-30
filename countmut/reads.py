@@ -70,7 +70,10 @@ def read_fail_reason(
         return "unmapped"
     if read.is_duplicate:
         return "duplicate"
-    if read.is_secondary or read.is_supplementary:
+    # NOTE: supplementary reads are kept (same as the C core / samtools default
+    # exclflags: UNMAP|SECONDARY|QCFAIL|DUP).  Older countmut only dropped
+    # SECONDARY too, so this keeps all backends byte-consistent.
+    if read.is_secondary:
         return "secondary"
     if fcfg.exclude_flags and (read.flag & fcfg.exclude_flags):
         return "excluded_flags"

@@ -23,7 +23,6 @@ from .model import (
     LOW_QUALITY,
     MutationConfig,
     SiteColumn,
-    reverse_complement,
 )
 
 MUTATION_HEADER = [
@@ -72,9 +71,12 @@ def mutation_row(col: SiteColumn, mcfg: MutationConfig, strand: str) -> list:
     u2, m2 = pick(high, ref_base), pick(high, mut_base)
     o0, o1, o2 = others(lq, u0, m0), others(insuf, u1, m1), others(high, u2, m2)
 
+    # All engines store bases in reference-forward orientation (BAM SEQ is
+    # reference-forward regardless of read strand), so u/m counts are strand-
+    # agnostic and the motif is the reference-forward window for BOTH strands.
+    # (Reverse-complementing it for '-' would contradict the reference-forward
+    # bases we are counting.)
     motif = col.motif
-    if strand == "-":
-        motif = reverse_complement(motif)
 
     row = [col.chrom, col.pos + 1, strand, motif, u0, u1, u2, m0, m1, m2]
     if mcfg.save_rest:
@@ -137,6 +139,7 @@ def base_rows(
     split_strand: bool = False,
     count_indels: bool = False,
     strands=("+", "-"),
+    min_depth: int = 0,
 ):
     """Yield TSV rows for base-count mode."""
     for col in columns:
@@ -147,6 +150,8 @@ def base_rows(
                     continue
                 agg = _base_counts(col, strand)
                 depth = sum(agg.values())
+                if min_depth > 0 and depth < min_depth:
+                    continue
                 row = [
                     col.chrom,
                     col.pos + 1,
@@ -172,6 +177,8 @@ def base_rows(
                 continue
             agg = _base_counts(col, None)
             depth = sum(agg.values())
+            if min_depth > 0 and depth < min_depth:
+                continue
             row = [
                 col.chrom,
                 col.pos + 1,
@@ -206,23 +213,41 @@ def allele_counts(col: SiteColumn) -> list[tuple[str, int]]:
 
 
 def allele_rows(
-    columns: Iterable[SiteColumn], ref_allele: str | None = None, min_support: int = 1
+    columns: Iterable[SiteColumn],
+    ref_allele: str | None = None,
+    min_support: int = 1,
+    min_depth: int = 0,
+    vcf: bool = False,
 ):
-    """Yield fixed-width rows matching the C backend:
-    ``chrom pos ref depth ref_count alt alt_count`` (alt='.' if no alt found)."""
+    """Yield rows matching the C backend.
+
+    Table mode: ``chrom pos ref depth ref_count alt alt_count`` (alt='.' if no
+    alt found).  VCF mode (``vcf=True``): a VCFv4.2 record per line, identical
+    to the C core's ``chrom pos . ref alt . PASS . GT:AD 0/1:ref,alt``.
+    """
     for col in columns:
         ref = (ref_allele or col.ref_base.upper()).upper()
         agg = _base_counts(col, None)
         depth = sum(agg.values())
+        if min_depth > 0 and depth < min_depth:
+            continue
         if depth <= 0:
             continue
         ref_n = agg.get(ref.lower(), 0)
         best, bn = ".", 0
         for b in ("A", "C", "G", "T"):
-            if b != ref:
+            if b != ref and b != "N":
                 n = agg.get(b.lower(), 0)
                 if n > bn:
                     bn, best = n, b
         if bn < min_support:
             best, bn = ".", 0
-        yield [col.chrom, col.pos + 1, ref, depth, ref_n, best, bn]
+        if vcf:
+            if best == ".":
+                continue
+            yield (
+                f"{col.chrom}\t{col.pos + 1}\t.\t{ref}\t{best}\t.\tPASS"
+                f"\t.\tGT:AD\t0/1:{ref_n},{bn}"
+            )
+        else:
+            yield [col.chrom, col.pos + 1, ref, depth, ref_n, best, bn]

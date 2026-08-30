@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-30
+
+### Fixed
+- **`-` strand mutation rows were internally inconsistent**: the motif was
+  reverse-complemented while the u/m counts were reference-forward, so the
+  motif's reference base disagreed with the counted bases.  Both strands now
+  show the reference-forward window, matching perbase/pbr/mpileup and the
+  reference-forward bases all three backends already counted.
+- **read-walk engine ignored deletions / ref-skips / failures**, so base mode
+  with `--count-indels` (and the emitted position set) diverged from the pileup
+  engine and C core.  It now tallies `del`/`ref_skip`/`fail` per read and emits
+  those positions, matching pileup/C exactly.
+- **pileup engine ignored the strand gate** (`--strand forward/reverse`), so
+  unsplit base output counted both strands; it now skips wrong-strand reads
+  like the read-walk engine and C core.
+- **`--min-depth` was a no-op**: applied in the Python base/allele formatters and
+  in the C base-mode (split) branch.
+- **Python allele mode**: fixed the header (was 5 columns "alleles_and_counts"
+  while rows have 7) and wired `min_allele_support`; added VCF output parity
+  with the C core (`--vcf` in the Python fallback path).
+- **C region parsing was off by one**: `--region chr1:1-60` was treated as
+  `[1,60)` (0-based, dropping the first position) instead of samtools' 1-based
+  `[0,60)`; matches the Python wrapper now.
+- **supplementary reads**: Python now keeps them (same as the C core / samtools
+  default `UNMAP|SECONDARY|QCFAIL|DUP`), fixing a C/Python divergence.
+- `MutationConfig` bases are case-normalized (lowercase `--ref-base a` works),
+  matching the C driver.
+- `FilterConfig.exclude_flags` default fixed to 1796 (`UNMAP|SECONDARY|QCFAIL|DUP`).
+
+### Tests
+- Added `tests/test_correctness.py` (non-palindromic reference) covering the
+  `-`-motif consistency, read-walk indel parity, pileup strand gate, `min-depth`,
+  allele mode shape/support and base-case handling.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added
