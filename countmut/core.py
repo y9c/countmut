@@ -749,7 +749,9 @@ def _split_region_if_needed(
         )
         return chunks
     except Exception as e:
-        logger.warning(f"Failed to count reads for {chrom}:{region_start}-{region_end}: {e}")
+        logger.warning(
+            f"Failed to count reads for {chrom}:{region_start}-{region_end}: {e}"
+        )
         # Return original region if counting fails
         return [(chrom, region_start, region_end)]
 
@@ -985,7 +987,11 @@ def count_mutations(
             try:
                 for chrom, bin_start, bin_end in filtered_bin_list:
                     chunks = _split_region_if_needed(
-                        samfile_for_counting, chrom, bin_start, bin_end, max_reads_per_chunk
+                        samfile_for_counting,
+                        chrom,
+                        bin_start,
+                        bin_end,
+                        max_reads_per_chunk,
                     )
                     if len(chunks) > 1:
                         regions_split += 1

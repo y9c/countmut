@@ -21,11 +21,10 @@ import pysam
 from . import reads
 from .model import (
     BASE_CATEGORY,
-    DNA_COMPLEMENT,
-    FilterConfig,
     HIGH_CONVERSION,
     LOW_QUALITY,
     MUTATION_CATEGORIES,
+    FilterConfig,
     MutationConfig,
     SiteColumn,
 )
@@ -66,7 +65,9 @@ def pileup_region(
     Returns :class:`SiteColumn` objects for every position we care about.
     """
     is_mutation = mode == "mutation"
-    targets = _target_sites(reference, chrom, start, end, mcfg.ref_base if is_mutation else None)
+    targets = _target_sites(
+        reference, chrom, start, end, mcfg.ref_base if is_mutation else None
+    )
     categories = MUTATION_CATEGORIES if is_mutation else (BASE_CATEGORY,)
 
     # Reference window padded by `pad` on each side for motif extraction.
@@ -79,8 +80,12 @@ def pileup_region(
     columns: list[SiteColumn] = []
     try:
         pileups = sam.pileup(
-            chrom, max(start, 0), end, truncate=True,
-            max_depth=fcfg.max_depth or 8000, min_base_quality=0,
+            chrom,
+            max(start, 0),
+            end,
+            truncate=True,
+            max_depth=fcfg.max_depth or 8000,
+            min_base_quality=0,
         )
     except TypeError:  # older pysam without all kwargs
         pileups = sam.pileup(chrom, max(start, 0), end, truncate=True)
@@ -96,7 +101,7 @@ def pileup_region(
         col = SiteColumn.make(chrom, pos, ref_base, categories=categories)
         if is_mutation:
             idx = pos - start + pad
-            col.motif = ext_seq[idx - pad: idx + pad + 1]
+            col.motif = ext_seq[idx - pad : idx + pad + 1]
 
         # Collapse overlapping mates.  CRITICAL canonical rule (consistent with
         # engine_readwalk): a read is only a dedup candidate if it passes the
@@ -117,11 +122,15 @@ def pileup_region(
                     col.add_indel(strand, "del")
                 continue
             qlen = len(rec.query_sequence) if rec.query_sequence is not None else 0
-            if not reads.is_internal(qpos, qlen, strand, fcfg.trim_start, fcfg.trim_end):
+            if not reads.is_internal(
+                qpos, qlen, strand, fcfg.trim_start, fcfg.trim_end
+            ):
                 continue  # trimmed: not counted, not a candidate
             if read_pred is not None and not read_pred(rec, qpos):
                 continue  # -e expression filter rejected this base
-            qual = int(rec.query_qualities[qpos]) if rec.query_qualities is not None else 0
+            qual = (
+                int(rec.query_qualities[qpos]) if rec.query_qualities is not None else 0
+            )
             key = reads.obs_key(rec.mapping_quality, rec.is_read1, qual)
             _remember(best, key, pr, rec, qpos)
 
@@ -130,7 +139,9 @@ def pileup_region(
             # BAM stores SEQ in reference-forward orientation, so the base is
             # already reference-forward here (verified on real aligner BAMs).
             base = rec.query_sequence[qpos].upper()
-            qual = int(rec.query_qualities[qpos]) if rec.query_qualities is not None else 0
+            qual = (
+                int(rec.query_qualities[qpos]) if rec.query_qualities is not None else 0
+            )
             if is_mutation:
                 category = HIGH_CONVERSION if qual >= fcfg.min_baseq else LOW_QUALITY
             else:

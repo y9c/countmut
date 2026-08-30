@@ -24,10 +24,8 @@ import pysam
 
 from .model import (
     FilterConfig,
-    LOW_QUALITY,
-    HIGH_CONVERSION,
-    BASE_CATEGORY,
 )
+
 
 # Mapping quality / first-in-pair / base-quality preference tuple.
 # We keep the observation with the *largest* key.  Higher MAPQ wins, then a
@@ -48,7 +46,9 @@ def actual_strand(read: pysam.AlignedSegment) -> str:
     return "+" if not read.is_reverse else "-"
 
 
-def is_internal(query_pos: int, query_len: int, strand: str, trim_start: int, trim_end: int) -> bool:
+def is_internal(
+    query_pos: int, query_len: int, strand: str, trim_start: int, trim_end: int
+) -> bool:
     """Is this query position inside the trimmed fragment (countmut semantics)?"""
     if strand == "+":
         return query_pos >= trim_start and query_len - query_pos > trim_end
@@ -83,8 +83,10 @@ def read_fail_reason(
         if read.get_tag("NS") > fcfg.max_sub:
             return "mismatch"
     if has_bisulfite_tags and (
-        fcfg.max_unc is not None and read.has_tag("Zf")
-        and fcfg.min_con is not None and read.has_tag("Yf")
+        fcfg.max_unc is not None
+        and read.has_tag("Zf")
+        and fcfg.min_con is not None
+        and read.has_tag("Yf")
     ):
         zf = read.get_tag("Zf")
         yf = read.get_tag("Yf")

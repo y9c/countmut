@@ -29,9 +29,18 @@ from . import reads
 # SAM flag bits (samtools naming) for flag.<name>
 # ---------------------------------------------------------------------------
 FLAG_BITS = {
-    "paired": 1, "proper_pair": 2, "unmap": 4, "munmap": 8, "reverse": 16,
-    "mreverse": 32, "read1": 64, "read2": 128, "secondary": 256,
-    "qcfail": 512, "dup": 1024, "supplementary": 2048,
+    "paired": 1,
+    "proper_pair": 2,
+    "unmap": 4,
+    "munmap": 8,
+    "reverse": 16,
+    "mreverse": 32,
+    "read1": 64,
+    "read2": 128,
+    "secondary": 256,
+    "qcfail": 512,
+    "dup": 1024,
+    "supplementary": 2048,
 }
 FLAG_BITS["proper-pair"] = 2
 FLAG_BITS["read-1"] = 64
@@ -60,7 +69,7 @@ def _lex(src: str):
                 j = i + 2
                 while j < n and (src[j].isdigit() or src[j].lower() in "abcdef"):
                     j += 1
-                toks.append(("num", int(src[i + 2:j], 16)))
+                toks.append(("num", int(src[i + 2 : j], 16)))
                 i = j
                 continue
             while j < n and src[j].isdigit():
@@ -95,7 +104,7 @@ def _lex(src: str):
             j = src.find("]", i)
             if j == -1:
                 raise ValueError("unterminated tag reference")
-            toks.append(("tag", src[i + 1:j]))
+            toks.append(("tag", src[i + 1 : j]))
             i = j + 1
             continue
         # identifier (also accept and/or/not as aliases for &&/||/!)
@@ -115,14 +124,20 @@ def _lex(src: str):
             i = j
             continue
         # operators (longest match)
-        three = src[i:i + 3]
-        two = src[i:i + 2]
+        three = src[i : i + 3]
+        two = src[i : i + 2]
         if three in _OP3:
-            toks.append(("op", three)); i += 3; continue
+            toks.append(("op", three))
+            i += 3
+            continue
         if two in _OP2:
-            toks.append(("op", two)); i += 2; continue
+            toks.append(("op", two))
+            i += 2
+            continue
         if c in _OP1:
-            toks.append(("op", c)); i += 1; continue
+            toks.append(("op", c))
+            i += 1
+            continue
         raise ValueError(f"unexpected character '{c}' in expression")
     toks.append(("eof", None))
     return toks
@@ -133,12 +148,24 @@ def _lex(src: str):
 # ---------------------------------------------------------------------------
 # binding power of a binary operator (centre, left)
 _BINFIX = {
-    "||": (70, 71), "&&": (80, 81),
-    "==": (90, 91), "!=": (90, 91), "=~": (90, 91), "!~": (90, 91),
-    ">": (100, 101), ">=": (100, 101), "<": (100, 101), "<=": (100, 101),
-    "|": (110, 111), "^": (120, 121), "&": (130, 131),
-    "+": (140, 141), "-": (140, 141),
-    "*": (150, 151), "/": (150, 151), "%": (150, 151),
+    "||": (70, 71),
+    "&&": (80, 81),
+    "==": (90, 91),
+    "!=": (90, 91),
+    "=~": (90, 91),
+    "!~": (90, 91),
+    ">": (100, 101),
+    ">=": (100, 101),
+    "<": (100, 101),
+    "<=": (100, 101),
+    "|": (110, 111),
+    "^": (120, 121),
+    "&": (130, 131),
+    "+": (140, 141),
+    "-": (140, 141),
+    "*": (150, 151),
+    "/": (150, 151),
+    "%": (150, 151),
 }
 _UNARY_BP = 160
 
@@ -367,6 +394,7 @@ def _compile(src, stack):
             return bool(_eval(expr, ns, funcs))
         except Exception:
             return False
+
     return run
 
 
@@ -384,6 +412,7 @@ def compile_read_pred(src):
         ns = _read_ns(rec, qpos)
         funcs = {"tag": rec.get_tag}
         return run(ns, funcs)
+
     return pred
 
 
@@ -397,6 +426,7 @@ def compile_pile_pred(src):
     def pred(col):
         ns = _pile_ns(col)
         return run(ns, {})
+
     return pred
 
 
@@ -420,30 +450,48 @@ def _read_ns(rec, qpos):
         except (KeyError, ValueError):
             return None
 
-    ns = {
+    return {
         # symbolic flag constants (samtools style): flag & UNMAP == 0
         **{k.upper(): v for k, v in FLAG_BITS.items()},
-        "mapq": rec.mapping_quality, "flag": rec.flag, "qname": qname,
-        "pos": rec.reference_start + 1, "endpos": rec.reference_end or (rec.reference_start + 1),
+        "mapq": rec.mapping_quality,
+        "flag": rec.flag,
+        "qname": qname,
+        "pos": rec.reference_start + 1,
+        "endpos": rec.reference_end or (rec.reference_start + 1),
         "pnext": (rec.next_reference_start + 1) if rec.next_reference_start >= 0 else 0,
         "mpos": (rec.next_reference_start + 1) if rec.next_reference_start >= 0 else 0,
-        "rname": rec.reference_name or "", "mrname": rec.next_reference_name or "",
-        "tlen": rec.template_length, "qlen": length, "rlen": rlen,
-        "ncigar": len(cig), "seq": rec.query_sequence or "",
+        "rname": rec.reference_name or "",
+        "mrname": rec.next_reference_name or "",
+        "tlen": rec.template_length,
+        "qlen": length,
+        "rlen": rlen,
+        "ncigar": len(cig),
+        "seq": rec.query_sequence or "",
         "qual": q if q is not None else "",
-        "sclen": sclen, "hclen": hclen,
-        "strand": strand, "bq": bq,
-        "distance_from_5prime": (length - qpos) if (qpos is not None and rec.is_reverse) else (qpos or 0),
-        "distance_from_3prime": qpos if (qpos is not None and rec.is_reverse) else (length - (qpos or 0)),
+        "sclen": sclen,
+        "hclen": hclen,
+        "strand": strand,
+        "bq": bq,
+        "distance_from_5prime": (length - qpos)
+        if (qpos is not None and rec.is_reverse)
+        else (qpos or 0),
+        "distance_from_3prime": qpos
+        if (qpos is not None and rec.is_reverse)
+        else (length - (qpos or 0)),
         "library": tag("LB"),
-        "tag": tag, "__tag__": tag,
+        "tag": tag,
+        "__tag__": tag,
         "exists": _apply_func_exists,
         "default": _apply_func_default,
         "length": _fn("length"),
-        "min": _fn("min"), "max": _fn("max"), "avg": _fn("avg"),
-        "sqrt": _fn("sqrt"), "log": _fn("log"), "pow": _fn("pow"), "exp": _fn("exp"),
+        "min": _fn("min"),
+        "max": _fn("max"),
+        "avg": _fn("avg"),
+        "sqrt": _fn("sqrt"),
+        "log": _fn("log"),
+        "pow": _fn("pow"),
+        "exp": _fn("exp"),
     }
-    return ns
 
 
 def _pile_ns(col):
@@ -452,20 +500,37 @@ def _pile_ns(col):
     g = sum(col.counts.get(s, {}).get("base", {}).get("G", 0) for s in ("+", "-"))
     t = sum(col.counts.get(s, {}).get("base", {}).get("T", 0) for s in ("+", "-"))
     n = sum(col.counts.get(s, {}).get("base", {}).get("N", 0) for s in ("+", "-"))
-    ns = {
-        "depth": col.total_depth(), "pos": col.pos, "ref": col.ref_base, "ref_base": col.ref_base,
-        "a": a, "c": c, "g": g, "t": t, "n": n,
-        "A": a, "C": c, "G": g, "T": t, "N": n,
+    return {
+        "depth": col.total_depth(),
+        "pos": col.pos,
+        "ref": col.ref_base,
+        "ref_base": col.ref_base,
+        "a": a,
+        "c": c,
+        "g": g,
+        "t": t,
+        "n": n,
+        "A": a,
+        "C": c,
+        "G": g,
+        "T": t,
+        "N": n,
         "ins": col.ins.get("+", 0) + col.ins.get("-", 0),
         "del": col.deletes.get("+", 0) + col.deletes.get("-", 0),
         "ref_skip": col.ref_skip.get("+", 0) + col.ref_skip.get("-", 0),
         "fail": col.fail.get("+", 0) + col.fail.get("-", 0),
         "motif": col.motif,
-        "exists": _apply_func_exists, "default": _apply_func_default,
-        "length": _fn("length"), "min": _fn("min"), "max": _fn("max"), "avg": _fn("avg"),
-        "sqrt": _fn("sqrt"), "log": _fn("log"), "pow": _fn("pow"), "exp": _fn("exp"),
+        "exists": _apply_func_exists,
+        "default": _apply_func_default,
+        "length": _fn("length"),
+        "min": _fn("min"),
+        "max": _fn("max"),
+        "avg": _fn("avg"),
+        "sqrt": _fn("sqrt"),
+        "log": _fn("log"),
+        "pow": _fn("pow"),
+        "exp": _fn("exp"),
     }
-    return ns
 
 
 def _apply_func_exists(*args):
@@ -473,4 +538,8 @@ def _apply_func_exists(*args):
 
 
 def _apply_func_default(*args):
-    return args[0] if (_truthy(args[0]) if args else False) else (args[1] if len(args) > 1 else None)
+    return (
+        args[0]
+        if (_truthy(args[0]) if args else False)
+        else (args[1] if len(args) > 1 else None)
+    )

@@ -21,8 +21,8 @@ Date: 2026-08-30
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # DNA helpers
@@ -45,9 +45,9 @@ def complement(base: str) -> str:
 # Quality / conversion categories
 # ---------------------------------------------------------------------------
 # Mutation-mode quality tiers, in output order (x0, x1, x2).
-LOW_QUALITY = "low_quality"        # x0 -- fails base-level filter (trim/qual/sub)
-INSUFFICIENT = "insufficient"      # x1 -- passes quality, fails read conversion filter
-HIGH_CONVERSION = "high"           # x2 -- passes quality + conversion filter
+LOW_QUALITY = "low_quality"  # x0 -- fails base-level filter (trim/qual/sub)
+INSUFFICIENT = "insufficient"  # x1 -- passes quality, fails read conversion filter
+HIGH_CONVERSION = "high"  # x2 -- passes quality + conversion filter
 MUTATION_CATEGORIES = (LOW_QUALITY, INSUFFICIENT, HIGH_CONVERSION)
 
 # Single category used in base-count / allele modes (no conversion tiers).
@@ -69,14 +69,14 @@ class FilterConfig:
 
     min_mapq: int = 0
     min_baseq: int = 20
-    max_sub: int = 1            # max substitutions (NS tag); read-level
-    max_unc: int | None = 3     # max unconverted (Zf tag); read-level, None=ignore
-    min_con: int | None = 1     # min converted (Yf tag); read-level, None=ignore
-    trim_start: int = 2         # bases trimmed from fragment 5' end
-    trim_end: int = 2           # bases trimmed from fragment 3' end
-    include_flags: int = 0      # SAM flags that must be set
+    max_sub: int = 1  # max substitutions (NS tag); read-level
+    max_unc: int | None = 3  # max unconverted (Zf tag); read-level, None=ignore
+    min_con: int | None = 1  # min converted (Yf tag); read-level, None=ignore
+    trim_start: int = 2  # bases trimmed from fragment 5' end
+    trim_end: int = 2  # bases trimmed from fragment 3' end
+    include_flags: int = 0  # SAM flags that must be set
     exclude_flags: int = 4 | 256 | 512  # unmapped, secondary, duplicate
-    max_depth: int = 0          # per-position depth cap (0 = unlimited)
+    max_depth: int = 0  # per-position depth cap (0 = unlimited)
 
 
 @dataclass
@@ -87,8 +87,8 @@ class MutationConfig:
     mut_base: str = "G"
     ref_base2: str | None = None  # alternative ref base for Yc/Zc tagging
     mut_base2: str | None = None
-    pad: int = 15                 # motif half-window
-    save_rest: bool = False        # also emit o0/o1/o2 (other bases)
+    pad: int = 15  # motif half-window
+    save_rest: bool = False  # also emit o0/o1/o2 (other bases)
 
 
 @dataclass
@@ -96,15 +96,15 @@ class StrandConfig:
     """Which biological strand(s) to report."""
 
     process: str = "both"  # 'both' | 'forward' | 'reverse'
-    split: bool = True     # emit separate '+'/'-' rows (False = sum both strands)
+    split: bool = True  # emit separate '+'/'-' rows (False = sum both strands)
 
 
 @dataclass
 class EngineConfig:
     """Selects the BAM walk strategy."""
 
-    engine: str = "auto"          # 'auto' | 'read-walk' | 'pileup'
-    mode: str = "mutation"        # 'mutation' | 'base' | 'allele'
+    engine: str = "auto"  # 'auto' | 'read-walk' | 'pileup'
+    mode: str = "mutation"  # 'mutation' | 'base' | 'allele'
     bin_size: int = 10_000
     threads: int | None = None
     region: str | None = None
@@ -115,14 +115,14 @@ class EngineConfig:
     min_strand_support: int = 0
     min_allele_depth: int = 0
     min_mean_depth: int = 0
-    min_depth: int = 0              # min site depth to report (base/allele)
-    vcf: bool = False               # allele mode: emit VCF
+    min_depth: int = 0  # min site depth to report (base/allele)
+    vcf: bool = False  # allele mode: emit VCF
     report_reference_bases: bool = False  # -k flanking window (pbr) -> also motif
     flanking: int = 0
     count_indels: bool = False
     split_strand: bool = True
-    read_expr: str | None = None    # pbr -e read-string filter
-    pile_expr: str | None = None    # pbr -p pileup-string filter
+    read_expr: str | None = None  # pbr -e read-string filter
+    pile_expr: str | None = None  # pbr -p pileup-string filter
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +139,9 @@ class SiteColumn:
     """
 
     chrom: str
-    pos: int                                   # 0-based genomic coordinate
-    ref_base: str                              # reference allele (forward strand)
-    motif: str = ""                            # pad-flanked reference window
+    pos: int  # 0-based genomic coordinate
+    ref_base: str  # reference allele (forward strand)
+    motif: str = ""  # pad-flanked reference window
     counts: dict[str, dict[str, Counter]] = field(default_factory=dict)
     ins: dict[str, int] = field(default_factory=dict)
     deletes: dict[str, int] = field(default_factory=dict)
@@ -159,7 +159,7 @@ class SiteColumn:
         motif: str = "",
         categories: Iterable[str] = MUTATION_CATEGORIES,
         strands: Iterable[str] = ("+", "-"),
-    ) -> "SiteColumn":
+    ) -> SiteColumn:
         """Create a SiteColumn pre-populated with zeroed counters."""
         col = cls(chrom=chrom, pos=pos, ref_base=ref_base, motif=motif)
         for s in strands:
@@ -214,7 +214,11 @@ class SiteColumn:
             for cat in self.counts.get(s, {}).values():
                 if sum(cat.values()) > 0:
                     return True
-            if self.ins.get(s, 0) or self.deletes.get(s, 0) \
-               or self.ref_skip.get(s, 0) or self.fail.get(s, 0):
+            if (
+                self.ins.get(s, 0)
+                or self.deletes.get(s, 0)
+                or self.ref_skip.get(s, 0)
+                or self.fail.get(s, 0)
+            ):
                 return True
         return False

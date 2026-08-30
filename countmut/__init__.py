@@ -9,8 +9,8 @@ Author: Ye Chang
 """
 
 from .backend import run_backend
-from .pipeline import PipelineResult, run_pipeline
 from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
+from .pipeline import PipelineResult, run_pipeline
 
 __author__ = "Ye Chang"
 __email__ = "yech1990@gmail.com"

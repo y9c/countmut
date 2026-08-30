@@ -15,22 +15,29 @@ Date: 2026-08-30
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from .model import (
-    BASE_CATEGORY,
-    DNA_COMPLEMENT,
     HIGH_CONVERSION,
     INSUFFICIENT,
     LOW_QUALITY,
-    MUTATION_CATEGORIES,
     MutationConfig,
     SiteColumn,
     reverse_complement,
 )
 
-MUTATION_HEADER = ["chrom", "pos", "strand", "motif",
-                   "u0", "u1", "u2", "m0", "m1", "m2"]
+MUTATION_HEADER = [
+    "chrom",
+    "pos",
+    "strand",
+    "motif",
+    "u0",
+    "u1",
+    "u2",
+    "m0",
+    "m1",
+    "m2",
+]
 MUTATION_HEADER_REST = MUTATION_HEADER + ["o0", "o1", "o2"]
 
 BASE_HEADER = ["chrom", "pos", "ref", "depth", "a", "c", "g", "t", "n"]
@@ -75,7 +82,9 @@ def mutation_row(col: SiteColumn, mcfg: MutationConfig, strand: str) -> list:
     return row
 
 
-def mutation_rows(columns: Iterable[SiteColumn], mcfg: MutationConfig, strands=("+", "-")):
+def mutation_rows(
+    columns: Iterable[SiteColumn], mcfg: MutationConfig, strands=("+", "-")
+):
     """Yield TSV rows for mutation mode following countmut's inclusion rule."""
     for col in columns:
         for strand in strands:
@@ -83,8 +92,13 @@ def mutation_rows(columns: Iterable[SiteColumn], mcfg: MutationConfig, strands=(
             high = counts.get(HIGH_CONVERSION, {})
             insuf = counts.get(INSUFFICIENT, {})
             # countmut only emits a site if any (insufficient or high) ref+mut base was seen
-            if insuf.get(mcfg.ref_base, 0) + insuf.get(mcfg.mut_base, 0) \
-               + high.get(mcfg.ref_base, 0) + high.get(mcfg.mut_base, 0) > 0:
+            if (
+                insuf.get(mcfg.ref_base, 0)
+                + insuf.get(mcfg.mut_base, 0)
+                + high.get(mcfg.ref_base, 0)
+                + high.get(mcfg.mut_base, 0)
+                > 0
+            ):
                 yield mutation_row(col, mcfg, strand)
 
 
@@ -108,7 +122,12 @@ def _base_counts(col: SiteColumn, strand: str | None) -> dict:
 
 def _special(col: SiteColumn, strand: str | None, kind: str) -> int:
     strands = [strand] if strand is not None else list(col.counts)
-    table = {"ins": col.ins, "del": col.deletes, "ref_skip": col.ref_skip, "fail": col.fail}
+    table = {
+        "ins": col.ins,
+        "del": col.deletes,
+        "ref_skip": col.ref_skip,
+        "fail": col.fail,
+    }
     return sum(table[kind].get(s, 0) for s in strands)
 
 
@@ -128,22 +147,49 @@ def base_rows(
                     continue
                 agg = _base_counts(col, strand)
                 depth = sum(agg.values())
-                row = [col.chrom, col.pos + 1, strand, ref, depth,
-                       agg["a"], agg["c"], agg["g"], agg["t"], agg["n"]]
+                row = [
+                    col.chrom,
+                    col.pos + 1,
+                    strand,
+                    ref,
+                    depth,
+                    agg["a"],
+                    agg["c"],
+                    agg["g"],
+                    agg["t"],
+                    agg["n"],
+                ]
                 if count_indels:
-                    row += [_special(col, strand, "ins"), _special(col, strand, "del"),
-                            _special(col, strand, "ref_skip"), _special(col, strand, "fail")]
+                    row += [
+                        _special(col, strand, "ins"),
+                        _special(col, strand, "del"),
+                        _special(col, strand, "ref_skip"),
+                        _special(col, strand, "fail"),
+                    ]
                 yield row
         else:
             if not col.has_data(None):
                 continue
             agg = _base_counts(col, None)
             depth = sum(agg.values())
-            row = [col.chrom, col.pos + 1, ref, depth,
-                   agg["a"], agg["c"], agg["g"], agg["t"], agg["n"]]
+            row = [
+                col.chrom,
+                col.pos + 1,
+                ref,
+                depth,
+                agg["a"],
+                agg["c"],
+                agg["g"],
+                agg["t"],
+                agg["n"],
+            ]
             if count_indels:
-                row += [_special(col, None, "ins"), _special(col, None, "del"),
-                        _special(col, None, "ref_skip"), _special(col, None, "fail")]
+                row += [
+                    _special(col, None, "ins"),
+                    _special(col, None, "del"),
+                    _special(col, None, "ref_skip"),
+                    _special(col, None, "fail"),
+                ]
             yield row
 
 
@@ -159,8 +205,9 @@ def allele_counts(col: SiteColumn) -> list[tuple[str, int]]:
     return pairs
 
 
-def allele_rows(columns: Iterable[SiteColumn], ref_allele: str | None = None,
-                min_support: int = 1):
+def allele_rows(
+    columns: Iterable[SiteColumn], ref_allele: str | None = None, min_support: int = 1
+):
     """Yield fixed-width rows matching the C backend:
     ``chrom pos ref depth ref_count alt alt_count`` (alt='.' if no alt found)."""
     for col in columns:

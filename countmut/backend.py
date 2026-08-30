@@ -14,7 +14,6 @@ Date: 2026-08-30
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -42,8 +41,11 @@ def build_binary() -> bool:
         return False
     try:
         subprocess.run(
-            ["make"], cwd=BACKEND_DIR, check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            ["make"],
+            cwd=BACKEND_DIR,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as exc:
         sys.stderr.write(f"[countmut] backend build failed: {exc.stderr.decode()}\n")
@@ -61,21 +63,43 @@ def ensure_backend() -> Path | None:
 # ---------------------------------------------------------------------------
 # config -> CLI args
 # ---------------------------------------------------------------------------
-def _build_cmd(binary: Path, *, samfile: str, reference: str, output: str | None,
-               fcfg: FilterConfig, mcfg: MutationConfig | None, scfg: StrandConfig,
-               ecfg: EngineConfig) -> list[str]:
+def _build_cmd(
+    binary: Path,
+    *,
+    samfile: str,
+    reference: str,
+    output: str | None,
+    fcfg: FilterConfig,
+    mcfg: MutationConfig | None,
+    scfg: StrandConfig,
+    ecfg: EngineConfig,
+) -> list[str]:
     cmd = [
-        str(binary), "--bam", samfile, "--fa", reference,
-        "--out", output or "-",
-        "--mode", ecfg.mode,
-        "--engine", {"read-walk": "read-walk", "pileup": "pileup", "auto": "auto"}[ecfg.engine],
-        "--min-mapq", str(fcfg.min_mapq),
-        "--min-baseq", str(fcfg.min_baseq),
-        "--max-sub", str(fcfg.max_sub),
-        "--trim-start", str(fcfg.trim_start),
-        "--trim-end", str(fcfg.trim_end),
-        "--threads", str(ecfg.threads or min(os.cpu_count() or 1, 8)),
-        "--max-depth", str(fcfg.max_depth or 8000),
+        str(binary),
+        "--bam",
+        samfile,
+        "--fa",
+        reference,
+        "--out",
+        output or "-",
+        "--mode",
+        ecfg.mode,
+        "--engine",
+        {"read-walk": "read-walk", "pileup": "pileup", "auto": "auto"}[ecfg.engine],
+        "--min-mapq",
+        str(fcfg.min_mapq),
+        "--min-baseq",
+        str(fcfg.min_baseq),
+        "--max-sub",
+        str(fcfg.max_sub),
+        "--trim-start",
+        str(fcfg.trim_start),
+        "--trim-end",
+        str(fcfg.trim_end),
+        "--threads",
+        str(ecfg.threads or min(os.cpu_count() or 1, 8)),
+        "--max-depth",
+        str(fcfg.max_depth or 8000),
     ]
     if fcfg.max_unc is not None:
         cmd += ["--max-unc", str(fcfg.max_unc)]
@@ -85,12 +109,21 @@ def _build_cmd(binary: Path, *, samfile: str, reference: str, output: str | None
         cmd.append("--count-indels")
     if ecfg.split_strand or ecfg.mode != "mutation":
         cmd.append("--split-strand")
-    cmd += ["--strand", {"both": "both", "forward": "forward", "reverse": "reverse"}[scfg.process]]
+    cmd += [
+        "--strand",
+        {"both": "both", "forward": "forward", "reverse": "reverse"}[scfg.process],
+    ]
     if ecfg.region:
         cmd += ["--region", ecfg.region]
     if ecfg.mode == "mutation" and mcfg is not None:
-        cmd += ["--ref-base", mcfg.ref_base, "--mut-base", mcfg.mut_base,
-                "--pad", str(mcfg.pad)]
+        cmd += [
+            "--ref-base",
+            mcfg.ref_base,
+            "--mut-base",
+            mcfg.mut_base,
+            "--pad",
+            str(mcfg.pad),
+        ]
         if mcfg.save_rest:
             cmd.append("--save-rest")
         if mcfg.ref_base2:
@@ -129,34 +162,61 @@ def run_backend(
     # ---- string expression filters need the Python engine (C can't eval) ----
     if ecfg.read_expr or ecfg.pile_expr:
         from .pipeline import run_pipeline
+
         start = time.time()
-        res = run_pipeline(samfile, reference, output, fcfg=fcfg, mcfg=mcfg,
-                           scfg=scfg, ecfg=ecfg)
-        return {"backend": "python", "success": res.success, "total_sites": res.total_sites,
-                "total_depth": res.total_depth, "elapsed": time.time() - start,
-                "error": res.error, "output": output, "note": "expression filter"}
+        res = run_pipeline(
+            samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
+        )
+        return {
+            "backend": "python",
+            "success": res.success,
+            "total_sites": res.total_sites,
+            "total_depth": res.total_depth,
+            "elapsed": time.time() - start,
+            "error": res.error,
+            "output": output,
+            "note": "expression filter",
+        }
 
     # ensure indices exist
     if not os.path.exists(samfile + ".bai"):
         import pysam
+
         pysam.index(samfile)
     if not os.path.exists(reference + ".fai"):
         import pysam
+
         pysam.faidx(reference)
 
     binary = ensure_backend()
     if binary is None:
         # graceful fall back to pure Python
         from .pipeline import run_pipeline
-        start = time.time()
-        res = run_pipeline(samfile, reference, output, fcfg=fcfg, mcfg=mcfg,
-                           scfg=scfg, ecfg=ecfg)
-        return {"backend": "python", "success": res.success, "total_sites": res.total_sites,
-                "total_depth": res.total_depth, "elapsed": time.time() - start,
-                "error": res.error, "output": output}
 
-    cmd = _build_cmd(binary, samfile=samfile, reference=reference, output=output,
-                     fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg)
+        start = time.time()
+        res = run_pipeline(
+            samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
+        )
+        return {
+            "backend": "python",
+            "success": res.success,
+            "total_sites": res.total_sites,
+            "total_depth": res.total_depth,
+            "elapsed": time.time() - start,
+            "error": res.error,
+            "output": output,
+        }
+
+    cmd = _build_cmd(
+        binary,
+        samfile=samfile,
+        reference=reference,
+        output=output,
+        fcfg=fcfg,
+        mcfg=mcfg,
+        scfg=scfg,
+        ecfg=ecfg,
+    )
     start = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     elapsed = time.time() - start
@@ -176,8 +236,22 @@ def run_backend(
 
     if proc.returncode != 0:
         sys.stderr.write(f"[countmut] backend error: {proc.stderr}\n")
-        return {"backend": "c", "success": False, "error": proc.stderr or "unknown",
-                "total_sites": rows, "total_depth": rows, "elapsed": elapsed, "output": output}
+        return {
+            "backend": "c",
+            "success": False,
+            "error": proc.stderr or "unknown",
+            "total_sites": rows,
+            "total_depth": rows,
+            "elapsed": elapsed,
+            "output": output,
+        }
 
-    return {"backend": "c", "success": True, "total_sites": rows, "total_depth": rows,
-            "elapsed": elapsed, "output": output, "error": None}
+    return {
+        "backend": "c",
+        "success": True,
+        "total_sites": rows,
+        "total_depth": rows,
+        "elapsed": elapsed,
+        "output": output,
+        "error": None,
+    }

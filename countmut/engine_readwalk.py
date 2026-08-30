@@ -21,17 +21,18 @@ import pysam
 from . import reads
 from .model import (
     BASE_CATEGORY,
-    DNA_COMPLEMENT,
-    FilterConfig,
     HIGH_CONVERSION,
     LOW_QUALITY,
     MUTATION_CATEGORIES,
+    FilterConfig,
     MutationConfig,
     SiteColumn,
 )
 
 
-def _target_sites(reference, chrom, start, end, ref_base: str | None) -> set[int] | None:
+def _target_sites(
+    reference, chrom, start, end, ref_base: str | None
+) -> set[int] | None:
     if ref_base is None:
         return None
     seq = reference.fetch(chrom, max(start, 0), end)
@@ -54,7 +55,9 @@ def readwalk_region(
 ) -> list[SiteColumn]:
     """Count one region (half-open [start,end)) by walking reads directly."""
     is_mutation = mode == "mutation"
-    targets = _target_sites(reference, chrom, start, end, mcfg.ref_base if is_mutation else None)
+    targets = _target_sites(
+        reference, chrom, start, end, mcfg.ref_base if is_mutation else None
+    )
 
     pad = mcfg.pad if mcfg else 0
     left = reference.fetch(chrom, max(start - pad, 0), start)
@@ -91,7 +94,9 @@ def readwalk_region(
                 continue
             if qpos >= qlen:
                 continue
-            if not reads.is_internal(qpos, qlen, strand, fcfg.trim_start, fcfg.trim_end):
+            if not reads.is_internal(
+                qpos, qlen, strand, fcfg.trim_start, fcfg.trim_end
+            ):
                 continue
             if read_pred is not None and not read_pred(read, qpos):
                 continue
@@ -125,12 +130,14 @@ def readwalk_region(
             continue
         ref_base = reference.fetch(chrom, ref_pos, ref_pos + 1).upper()
         col = SiteColumn.make(
-            chrom, ref_pos, ref_base,
+            chrom,
+            ref_pos,
+            ref_base,
             categories=MUTATION_CATEGORIES if is_mutation else (BASE_CATEGORY,),
         )
         if is_mutation:
             idx = ref_pos - start + pad
-            col.motif = ext_seq[idx - pad: idx + pad + 1]
+            col.motif = ext_seq[idx - pad : idx + pad + 1]
         for category, strands in pos_buckets[ref_pos].items():
             for strand, bases in strands.items():
                 for base, count in bases.items():

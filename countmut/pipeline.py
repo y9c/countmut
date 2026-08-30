@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from typing import Any
 
 import pysam
 
+from .core import read_fasta_index
 from .engine_pileup import pileup_region
 from .engine_readwalk import readwalk_region
 from .formatter import (
@@ -34,7 +34,6 @@ from .formatter import (
     mutation_header,
     mutation_rows,
 )
-from .core import read_fasta_index
 from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 
 # ---------------------------------------------------------------------------
@@ -60,7 +59,13 @@ def _init_worker(
     strand_process: str,
     has_bisulfite: bool,
 ) -> None:
-    global _WORKER_SAM, _WORKER_REF, _WORKER_FCFG, _WORKER_MCFG, _WORKER_SCFG, _WORKER_ECFG
+    global \
+        _WORKER_SAM, \
+        _WORKER_REF, \
+        _WORKER_FCFG, \
+        _WORKER_MCFG, \
+        _WORKER_SCFG, \
+        _WORKER_ECFG
     global _WORKER_STRANDS, _WORKER_BISULFITE
     if _WORKER_SAM is None:
         _WORKER_SAM = pysam.AlignmentFile(samfile, "rb")
@@ -79,33 +84,68 @@ def _worker(args: tuple) -> dict[str, Any]:
     try:
         mode = _WORKER_ECFG.mode
         from .expression import compile_pile_pred, compile_read_pred
-        read_pred = compile_read_pred(_WORKER_ECFG.read_expr) if _WORKER_ECFG.read_expr else None
-        pile_pred = compile_pile_pred(_WORKER_ECFG.pile_expr) if _WORKER_ECFG.pile_expr else None
+
+        read_pred = (
+            compile_read_pred(_WORKER_ECFG.read_expr)
+            if _WORKER_ECFG.read_expr
+            else None
+        )
+        pile_pred = (
+            compile_pile_pred(_WORKER_ECFG.pile_expr)
+            if _WORKER_ECFG.pile_expr
+            else None
+        )
         if _WORKER_ECFG.engine == "read-walk" or (
             _WORKER_ECFG.engine == "auto" and mode == "mutation"
         ):
             cols = readwalk_region(
-                _WORKER_SAM, _WORKER_REF, chrom, start, end,
-                _WORKER_FCFG, _WORKER_MCFG, mode=mode,
+                _WORKER_SAM,
+                _WORKER_REF,
+                chrom,
+                start,
+                end,
+                _WORKER_FCFG,
+                _WORKER_MCFG,
+                mode=mode,
                 strand_process=_WORKER_SCFG.process,
                 has_bisulfite_tags=_WORKER_BISULFITE,
-                read_pred=read_pred, pile_pred=pile_pred,
+                read_pred=read_pred,
+                pile_pred=pile_pred,
             )
         else:
             cols = pileup_region(
-                _WORKER_SAM, _WORKER_REF, chrom, start, end,
-                _WORKER_FCFG, _WORKER_MCFG, mode=mode,
+                _WORKER_SAM,
+                _WORKER_REF,
+                chrom,
+                start,
+                end,
+                _WORKER_FCFG,
+                _WORKER_MCFG,
+                mode=mode,
                 has_bisulfite_tags=_WORKER_BISULFITE,
-                read_pred=read_pred, pile_pred=pile_pred,
+                read_pred=read_pred,
+                pile_pred=pile_pred,
             )
 
         rows = _render(cols)
         depth = sum(c.total_depth() for c in cols)
-        return {"region": f"{chrom}:{start}-{end}", "rows": rows, "depth": depth,
-                "sites": len(cols), "success": True, "error": None}
+        return {
+            "region": f"{chrom}:{start}-{end}",
+            "rows": rows,
+            "depth": depth,
+            "sites": len(cols),
+            "success": True,
+            "error": None,
+        }
     except Exception as exc:  # pragma: no cover - surfaced to caller
-        return {"region": f"{chrom}:{start}-{end}", "rows": [], "depth": 0,
-                "sites": 0, "success": False, "error": str(exc)}
+        return {
+            "region": f"{chrom}:{start}-{end}",
+            "rows": [],
+            "depth": 0,
+            "sites": 0,
+            "success": False,
+            "error": str(exc),
+        }
 
 
 def _render(cols) -> list[list]:
@@ -114,12 +154,14 @@ def _render(cols) -> list[list]:
     if mode == "mutation":
         return list(mutation_rows(cols, _WORKER_MCFG, strands))
     if mode == "base":
-        return list(base_rows(
-            cols,
-            split_strand=_WORKER_SCFG.split,
-            count_indels=_WORKER_ECFG.count_indels,
-            strands=strands,
-        ))
+        return list(
+            base_rows(
+                cols,
+                split_strand=_WORKER_SCFG.split,
+                count_indels=_WORKER_ECFG.count_indels,
+                strands=strands,
+            )
+        )
     # allele table
     return list(allele_rows(cols))
 
@@ -211,9 +253,6 @@ def run_pipeline(
 
     threads = ecfg.threads or min(os.cpu_count() or 1, 8)
 
-    # ---- resolve engine ------------------------------------------------------
-    engine = pick_engine(ecfg.mode, ecfg.engine)
-
     # ---- build bins ----------------------------------------------------------
     ref_lengths = read_fasta_index(reference)
     with pysam.AlignmentFile(samfile, "rb") as sam:
@@ -235,9 +274,14 @@ def run_pipeline(
         max_workers=threads,
         initializer=_init_worker,
         initargs=(
-            samfile, reference,
-            fcfg, mcfg, scfg, ecfg,
-            scfg.process, has_bisulfite,
+            samfile,
+            reference,
+            fcfg,
+            mcfg,
+            scfg,
+            ecfg,
+            scfg.process,
+            has_bisulfite,
         ),
     ) as pool:
         futures = [pool.submit(_worker, b) for b in bins]
@@ -245,7 +289,9 @@ def run_pipeline(
             res = fut.result()
             if not res["success"]:
                 if verbose:
-                    sys.stderr.write(f"[countmut] region {res['region']}: {res['error']}\n")
+                    sys.stderr.write(
+                        f"[countmut] region {res['region']}: {res['error']}\n"
+                    )
                 continue
             all_rows.extend(res["rows"])
             total_sites += res["sites"]
@@ -254,11 +300,14 @@ def run_pipeline(
     # ---- sort + write --------------------------------------------------------
     all_rows.sort(key=lambda r: (chrom_order.get(r[0], 1 << 30), r[1]))
     _write(header, all_rows, output)
-    result = PipelineResult(
-        header=header, rows=all_rows, total_sites=total_sites,
-        total_depth=total_depth, elapsed=time.time() - start, success=True,
+    return PipelineResult(
+        header=header,
+        rows=all_rows,
+        total_sites=total_sites,
+        total_depth=total_depth,
+        elapsed=time.time() - start,
+        success=True,
     )
-    return result
 
 
 def _header_for(mode: str, mcfg, scfg, ecfg) -> list[str]:
