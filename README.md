@@ -27,6 +27,26 @@ give the per-strand base composition; adding a reference/mutation pair gives
 the conversion view with a `mutation_rate` column; `--vcf` gives an allele
 VCF. Output is per strand by default, and `--strandless` merges the two.
 
+## DNA or RNA?
+
+The counting itself is agnostic — it compares every read base against a
+reference and a target base — but what the ratio means depends on your sample.
+In **DNA**, `--ref-base C --mut-base T` is the classic bisulfite or
+cytosine-damage readout: a genuine C→T change on one strand. In **RNA** there
+is no genomic mutation to find; the transcript itself is the reference, and a
+modified base (for example m5C, in the chemistries that detect it) makes
+reverse transcription misread it — a modified C reads out as a U that the
+sequencer records as T. So the column labelled "converted" is really the
+**modification signal**, and the `mutation_rate` is a readout of how much of
+the RNA at that site carries the modification — not a variant frequency.
+
+Because RNA is single-stranded, strand matters differently than in DNA. The
+transcript is copied from only one strand of the genome, and a modification
+rides on that one RNA strand, so the two biological strands are *not*
+symmetrical — which is precisely why countmut keeps the strand per row, and
+why a per-strand filter such as `-e "strand == 1"` is a meaningful question in
+an RNA library.
+
 ## Filtering with one expression instead of ten flags
 
 Read-level QC and trimming are expressions (`-e`), site-level rules are
