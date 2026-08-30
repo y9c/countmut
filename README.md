@@ -90,6 +90,18 @@ detected automatically. **CRAM** is not read by this self-contained core; conver
 first: `samtools view -b in.cram -o out.bam` — for a CRAM with an embedded
 reference, that conversion also works without a separate FASTA.
 
+## Performance
+
+![scaling + filter overhead](docs/perf-scaling.png)
+
+Measured on a bimodal benchmark (232 k reads, 23.2 M read-bases, deep rRNA-style
+hotspots): read-walk mutation 2.14 s @1 thread → 0.92 s @16; pileup base
+1.96 s → 0.69 s (dynamic work queue keeps deep hotspots from serializing).
+Read-constant filters run once per read (≈ free); only true per-base filters
+`qpos/bq/base/ref/dist5/dist3` add cost (~0.3 s @8 threads for `bq and dist5`).
+`tests/make_bench_bam.py` regenerates the fixture; `scripts/plot_perf.py` re-renders
+this figure.
+
 ## License
 
 MIT
