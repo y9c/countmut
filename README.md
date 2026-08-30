@@ -1,22 +1,29 @@
 # CountMut
 
-CountMut answers a simple question from modification and damage assays: at a
-given site, how many reads show the reference base versus the converted one,
-and what is that as a rate? Earlier tools made it harder than it needed to be —
-they buried QC under dozens of filter flags, forced a choice between two
-BAM-walking strategies that disagreed on paired-end overlaps, and re-priced a
-cheap read-level filter at every base of every read, which quietly dominates
-deep ribosomal hotspots.
+Counting a modification assay — bisulfite DNA, or an RNA modification library —
+always comes down to the same small question: at each site, how many reads
+still show the reference base and how many show the conversion, and what is
+that as a rate? The tools that answered it made the small thing hard. Quality
+control meant another flag for every idea. Two BAM-walking strategies existed
+and quietly disagreed exactly where the data gets hard — the deep, heavily
+overlapped sites. And a filter as cheap as `mapq >= 20` was priced once per
+aligned position instead of once per read, so something that should be free
+could silently add minutes to every whole-genome run.
 
-The design fixes all three at once. QC and trimming are one expression
-language evaluated in the C core, so there are no filter flags to grow. Both
-walking strategies share a single count structure and are byte-identical, so
-the engine is purely a speed choice. And the parser decides at compile time
-which variables an expression touches: read-constant filters run once per read
-(a whole-genome `mapq >= 20` costs about half a second), while the six
-per-base values stay accurate but cheap. The mutation view ends with a
-`mutation_rate`, and read QC stays honest because BAMs already store reverse
-reads reference-forward.
+CountMut removes all of that with one design. QC and trimming stopped being
+flags and became expressions — the samtools filter grammar, evaluated in C.
+The two walks fill the same per-site count table, so they provably agree and
+the engine choice is only about speed. The parser reads a filter once, sees
+which variables it actually touches, and runs every read-level rule exactly
+once per read; only the six values that genuinely change per base are
+evaluated per base.
+
+It shows in the numbers. On a deep rRNA transcriptome (784 k reads, 90 Mb), a
+genome-wide `mapq >= 20` costs about half a second on top of an ~11 s run,
+the one filter that must run per base was cut roughly threefold (per-base
+evaluation ~180 → ~55 ns), and both engines output byte-identical rows. The
+mutation view ends with a `mutation_rate` column — the number that actually
+belongs in the paper.
 
 ```bash
 pip install -e .
