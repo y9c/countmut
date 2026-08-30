@@ -32,6 +32,21 @@ class TestCLI:
         # Version can be either from pyproject.toml or package metadata
         assert "0." in result.output  # Just check it has a version
 
+    def test_resolve_auto(self):
+        """--mode auto shows the mutation view only when BOTH targets are given."""
+        import click
+
+        from countmut.cli import _resolve_auto
+
+        assert _resolve_auto("auto", "C", "T") == ("mutation", "C", "T")
+        assert _resolve_auto("auto", None, None) == ("base", None, None)
+        assert _resolve_auto("auto", None, None, vcf=True)[0] == "allele"
+        # explicit mutation mode keeps the historical A/G defaults
+        assert _resolve_auto("mutation", None, None) == ("mutation", "A", "G")
+        assert _resolve_auto("base", "C", "T") == ("base", "C", "T")
+        with pytest.raises(click.UsageError):
+            _resolve_auto("auto", "C", None)
+
     def test_cli_missing_required_args(self):
         """Test CLI with missing required arguments."""
         result = self.runner.invoke(main, [])

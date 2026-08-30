@@ -39,17 +39,27 @@ make backend
 countmut -i in.bam -r ref.fa -o mut.tsv --ref-base A --mut-base G
 
 # per-site base counts (perbase/mpileup style)
-countmut -i in.bam -r ref.fa --mode base -o depth.tsv
+countmut -i in.bam -r ref.fa -o depth.tsv
 
 # alleles -> VCF (minipileup style)
-countmut -i in.bam -r ref.fa --mode allele --vcf -o allele.vcf
+countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 ```
 
 ## Modes
 
-| Mode | Output |
-|------|--------|
-| `mutation` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 [o0 o1 o2]` (strand-aware substitution table) |
+There is **no `--mode` flag** — the output view is inferred from your inputs:
+
+| invocation | view |
+|---|---|
+| `countmut -i x -r ref -o out` | **base** (count all bases, per strand) |
+| `... --ref-base C --mut-base T` | **mutation** view + `mutation_rate` |
+| `... --vcf` | **allele** VCF |
+
+Internally this resolves to one of three output schemas:
+
+| view | columns |
+|------|---------|
+| `mutation` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 [o0 o1 o2] mutation_rate` — `mutation_rate` = m/(u+m), `nan` when no informative reads |
 | `base` | `chrom pos [strand] ref depth a c g t n [ins del ref_skip fail]` |
 | `allele` | `chrom pos ref depth ref_count alt alt_count`, or VCF with `--vcf` |
 
@@ -79,12 +89,14 @@ countmut -i x.bam -r ref.fa -p "ref == 'A' && depth >= 5 && g > 2"
 Read variables: `mapq`, `flag` (+ `flag.dup`, `flag.unmap`, ...), `qname`, `pos`,
 `endpos`, `pnext`, `rname`, `mrname`, `tlen`, `qlen`, `rlen`, `ncigar`, `seq`,
 `qual`, `sclen`, `hclen`, `bq`, `dist5`/`dist3`, `strand`, `[NM]`/`[RG]` tags,
-`avg(qual)`, `exists([NM])`, `sqrt(mapq)`, ...
+`avg(qual)`, `exists([NM])`, `sqrt(mapq)`, ...  (per-base `qpos`, `bq`, `base`,
+`ref`; read-constant values are evaluated once per read.)
 
 Site variables: `depth`, `pos`, `ref`, `a c g t n`, `ins`, `del`, `ref_skip`, `fail`.
 
-> When `-e`/`-p` is given, counting runs on the Python engine (the C core cannot
-> evaluate strings). Without expressions, the fast C backend is used.
+> `-e`/`-p` run **inside the fast C backend** via an embedded Lua 5.4 state —
+> there is no Python fallback and no per-base slowdown: read-constant filters
+> like `mapq >= 20` or `[NM] <= 3` are evaluated once per read.
 
 ## Engine selection
 
@@ -97,10 +109,10 @@ Site variables: `depth`, `pos`, `ref`, `a c g t n`, `ins`, `del`, `ref_skip`, `f
 
 ```
 -i/--input, -r/--reference, -o/--output
---mode {mutation,base,allele}   --engine {auto,read-walk,pileup}
+--engine {auto,read-walk,pileup}
 --region, --threads/-t
 --ref-base, --mut-base, --pad, --save-rest
---split-strand, --count-indels, --min-depth, --min-allele-support, --vcf
+--strandless, --count-indels, --min-depth, --min-allele-support, --vcf
 -e/--expression, -p/--pile-expression
 ```
 

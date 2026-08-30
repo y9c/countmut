@@ -137,6 +137,50 @@ def test_minus_motif_identical_both_engines(motif_data):
         assert r[3] == "ACG", f"Unexpected motif {r[3]!r} on strand {r[2]}"
 
 
+def test_perbase_expr_parity_qpos(motif_data):
+    """qpos-dependent per-base filters (dist5/dist3/base/bq) must be byte-identical
+    between engines.  Regression: the pileup `expr_pass` memo dropped the qpos
+    arg (used qpos=0), silently breaking dist5/dist3/base in the pileup engine."""
+    bam, fa = motif_data
+    for expr in ("dist5 >= 5", "dist3 >= 5", "base == 'A'", "bq >= 20"):
+        rw = run_c(
+            bam, fa,
+            mode="mutation", engine="read-walk", region="chr1:1-25",
+            extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1",
+                   "--read-expr", expr],
+        )
+        pl = run_c(
+            bam, fa,
+            mode="mutation", engine="pileup", region="chr1:1-25",
+            extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1",
+                   "--read-expr", expr],
+        )
+        assert rw == pl, f"per-base qpos expr diverged between engines: {expr!r}"
+
+
+def test_mutation_rate_column(motif_data):
+    """mutation view now carries a mutation_rate = m/(u+m) (across tiers)."""
+    bam, fa = motif_data
+    header, rows = run_c(
+        bam,
+        fa,
+        mode="mutation",
+        engine="read-walk",
+        region="chr1:1-8",
+        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1", "--save-rest"],
+    )
+    assert header[-1] == "mutation_rate"
+    assert all(len(r) == 14 for r in rows)  # 10 + o0/o1/o2 + mutation_rate
+    for r in rows:
+        u = r[4] + r[5] + r[6]  # u0+u1+u2
+        m = r[7] + r[8] + r[9]  # m0+m1+m2
+        rate = float(r[-1])
+        if u + m:
+            assert abs(rate - m / (u + m)) < 1e-4, (r, u, m, rate)
+        else:
+            assert rate != rate, f"expected NaN for {r}"  # NaN rate
+
+
 # ---------------------------------------------------------------------------
 # BUG: read-walk ignored deletions / ref-skips (diverged from pileup)
 # ---------------------------------------------------------------------------
@@ -150,7 +194,7 @@ def test_indel_parity(indel_data):
             mode="base",
             engine=engine,
             region="chr1:31-45",
-            extra=["--split-strand", "--count-indels"],
+            extra=["--count-indels"],
         )
         # header: chrom pos strand ref depth a c g t n ins del ref_skip fail
         per = {}
@@ -189,7 +233,7 @@ def test_strand_gate_depths(motif_data):
 # ---------------------------------------------------------------------------
 def test_min_depth(motif_data):
     bam, fa = motif_data
-    for mode, xtra in (("base", ["--split-strand"]), ("allele", [])):
+    for mode, xtra in (("base", []), ("allele", [])):
         _h, rows = run_c(
             bam,
             fa,

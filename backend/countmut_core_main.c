@@ -80,7 +80,7 @@ static void usage(void) {
         "  --trim-r1-end N --trim-r2-start N               read R1 3'-end / R2 5'-start trim\n"
         "  --min-allele-support N --min-allele-frac F --min-strand-support N\n"
         "  --min-depth N --mean-depth N\n"
-        "  --count-indels --split-strand\n"
+        "  --count-indels [--strandless]\n"
         "  --strand S            both | forward | reverse\n"
         "  --read-expr EXPR       -e Lua read filter (evaluated per base)\n"
         "  --pile-expr EXPR       -p Lua site filter (evaluated per site)\n"
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
     cfg.min_depth = 0;
     cfg.mean_depth = 0;
     cfg.count_indels = 0;
-    cfg.split_strand = 1;
+    cfg.strandless = 0;      /* base/allele: per-strand '+'/'-' by default; --strandless collapses */
     cfg.strand_process = CM_STRAND_BOTH;
     cfg.max_depth = 0;       /* 0 = unlimited (count all reads) */
     cfg.threads = 1;
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
         {"min-depth", required_argument, 0, 1010},
         {"mean-depth", required_argument, 0, 1011},
         {"count-indels", no_argument, 0, 1012},
-        {"split-strand", no_argument, 0, 1013},
+        {"strandless", no_argument, 0, 1013},
         {"strand", required_argument, 0, 's'},
         {"max-depth", required_argument, 0, 1014},
         {"threads", required_argument, 0, 't'},
@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
         case 1010: cfg.min_depth = atoi(optarg); break;
         case 1011: cfg.mean_depth = atoi(optarg); break;
         case 1012: cfg.count_indels = 1; break;
-        case 1013: cfg.split_strand = 1; break;
+        case 1013: cfg.strandless = 1; break;
         case 1014: cfg.max_depth = atoi(optarg); break;
         case 1015: cfg.flanking = atoi(optarg); break;
         default: usage(); return 1;

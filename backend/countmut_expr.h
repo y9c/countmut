@@ -26,13 +26,19 @@ void cm_expr_free(cm_expr *x);
 
 /* True if a read-level (-e) filter is configured and compiled. */
 int cm_expr_has_read(const cm_expr *x);
+/* True if the -e filter depends only on read-level values (not per-base
+ * qpos/bq/base/ref/dist) -- callers may then evaluate it once per read. */
+int cm_expr_read_constant(const cm_expr *x);
 /* True if a site-level (-p) filter is configured and compiled. */
 int cm_expr_has_pile(const cm_expr *x);
 
 /* Evaluate the -e filter for one aligned base of read `b`.
- * `strand_sign` is +1/-1 (biological, paired-aware).  Returns 1 = keep the
- * base, 0 = reject.  Always 1 if no read filter. */
-int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, int qpos, int strand_sign);
+ * `rname`/`mrname` are the contig names of the read and its mate (may be ""),
+ * `qpos` the query position, `strand_sign` is +1/-1 (biological, paired-aware)
+ * and `ref_base` the reference base the base aligns over.  Returns 1 = keep
+ * the base, 0 = reject.  Always 1 if no read filter. */
+int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
+                 int qpos, int strand_sign, char ref_base);
 
 /* Evaluate the -p filter for one site.  cnt[5] = A/C/G/T/N totals across all
  * strands and quality tiers; ins/del/rs/fl are the indel/ref-skip/fail counts;

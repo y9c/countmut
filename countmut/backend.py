@@ -75,6 +75,11 @@ def _build_cmd(
     scfg: StrandConfig,
     ecfg: EngineConfig,
 ) -> list[str]:
+    if ecfg.mode == "auto":
+        raise ValueError(
+            "mode='auto' must be resolved to 'mutation'/'base' first "
+            "(use countmut.cli._resolve_auto)"
+        )
     cmd = [
         str(binary),
         "--bam",
@@ -94,8 +99,8 @@ def _build_cmd(
     ]
     if ecfg.count_indels:
         cmd.append("--count-indels")
-    if ecfg.split_strand:
-        cmd.append("--split-strand")
+    if ecfg.strandless:
+        cmd.append("--strandless")
     if scfg.process in ("forward", "reverse"):
         cmd += ["--strand", scfg.process]
     if ecfg.read_expr:

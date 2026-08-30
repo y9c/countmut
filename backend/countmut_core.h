@@ -55,7 +55,7 @@ typedef struct {
     int     min_depth;       /* base/allele: min site depth */
     int     mean_depth;
     int     count_indels;
-    int     split_strand;
+    int     strandless;      /* 1 = collapse +/- strands (base/allele); 0 = per-strand (default) */
     int     strand_process;  /* CM_STRAND_* */
     int     max_depth;
     int     threads;

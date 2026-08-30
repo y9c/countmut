@@ -2,9 +2,11 @@
 """
 CountMut CLI -- unified strand-aware counter with a C backend.
 
-Usage: countmut --mode mutation --ref-base A --mut-base G ...
-       countmut --mode base ...
-       countmut --mode allele --vcf ...
+There is no --mode flag: the output view is inferred from the inputs.
+   countmut -i x.bam -r ref.fa -o out.bed            base view (all bases)
+   countmut -i x.bam -r ref.fa -o out.tsv --ref-base A --mut-base G
+                                                        mutation view (+ rate)
+   countmut -i x.bam -r ref.fa -o out.vcf --vcf          allele VCF
 
 The heavy computation runs in the bundled C core (``backend/countmut_core``);
 this wrapper drives it and renders a rich summary.
@@ -41,7 +43,7 @@ click.rich_click.OPTION_GROUPS = {
         {"name": "Input/Output", "options": ["--input", "--reference", "--output"]},
         {
             "name": "Mode & Engine",
-            "options": ["--mode", "--engine", "--region", "--threads"],
+            "options": ["--engine", "--region", "--threads"],
         },
         {
             "name": "Mutation Options",
@@ -50,7 +52,7 @@ click.rich_click.OPTION_GROUPS = {
         {
             "name": "Base/Allele Options",
             "options": [
-                "--split-strand",
+                "--strandless",
                 "--count-indels",
                 "--max-depth",
                 "--vcf",
@@ -65,6 +67,40 @@ click.rich_click.OPTION_GROUPS = {
 }
 
 console = Console()
+
+
+def _resolve_auto(
+    mode: str,
+    ref_base: str | None,
+    mut_base: str | None,
+    vcf: bool = False,
+) -> tuple[str, str | None, str | None]:
+    """Resolve the counting view from the inputs (there is no `--mode` flag):
+
+    - ``vcf`` set                      -> allele view (VCF)
+    - both `--ref-base` / `--mut-base` -> mutation view (mutation_rate)
+    - exactly one target               -> error (ambiguous)
+    - neither (no vcf)                 -> base view (full base composition)
+
+    Returns the resolved (mode, ref_base, mut_base).  Mutation mode applies the
+    historical A/G defaults when the targets are omitted.
+    """
+    if mode == "auto":
+        if vcf:
+            mode = "allele"
+        elif ref_base and mut_base:
+            mode = "mutation"
+        elif ref_base or mut_base:
+            raise click.UsageError(
+                "--mode auto needs BOTH --ref-base and --mut-base (mutation view) "
+                "or neither (base view)"
+            )
+        else:
+            mode = "base"
+    if mode == "mutation":
+        ref_base = ref_base or "A"
+        mut_base = mut_base or "G"
+    return mode, ref_base, mut_base
 
 
 @click.command(
@@ -97,13 +133,6 @@ console = Console()
     help="Output file (default: stdout)",
 )
 @click.option(
-    "--mode",
-    type=click.Choice(["mutation", "base", "allele"], case_sensitive=False),
-    default="mutation",
-    show_default=True,
-    help="Counting mode",
-)
-@click.option(
     "--engine",
     type=click.Choice(["auto", "read-walk", "pileup"], case_sensitive=False),
     default="auto",
@@ -117,10 +146,10 @@ console = Console()
     "-t", "--threads", type=int, default=None, help="Worker threads (default: auto)"
 )
 @click.option(
-    "--ref-base", default="A", show_default=True, help="Reference base to count from"
+    "--ref-base", default=None, show_default=False, help="Reference base to count from (mutation view)"
 )
 @click.option(
-    "--mut-base", default="G", show_default=True, help="Mutation base to count"
+    "--mut-base", default=None, show_default=False, help="Mutation base to count (mutation view)"
 )
 @click.option(
     "--pad", type=int, default=15, show_default=True, help="Motif half-window"
@@ -129,11 +158,11 @@ console = Console()
     "-s", "--save-rest", is_flag=True, help="Also emit o0/o1/o2 (other bases)"
 )
 @click.option(
-    "--split-strand",
+    "--strandless",
     is_flag=True,
-    default=True,
+    default=False,
     show_default=True,
-    help="Emit separate '+'/'-' rows (base/allele mode)",
+    help="Collapse '+'/'-' strands into one row (base/allele mode; default is per-strand)",
 )
 @click.option(
     "--count-indels",
@@ -172,7 +201,6 @@ def main(
     samfile,
     reference,
     output,
-    mode,
     engine,
     region,
     threads,
@@ -180,7 +208,7 @@ def main(
     mut_base,
     pad,
     save_rest,
-    split_strand,
+    strandless,
     count_indels,
     max_depth,
     vcf,
@@ -189,6 +217,10 @@ def main(
     verbose,
 ):
     """[bold green]countmut: unified ultra-fast strand-aware counter[/bold green]."""
+    # No --mode flag: the view is inferred from the inputs (vcf -> allele,
+    # both targets -> mutation, else base) and resolved to a concrete mode
+    # for the backend and the info panel below.
+    mode, ref_base, mut_base = _resolve_auto("auto", ref_base, mut_base, vcf)
     # Panels/logs go to stderr so stdout stays pure data.
     console = Console(stderr=True)
 
@@ -204,14 +236,14 @@ def main(
         if mode == "mutation"
         else None
     )
-    scfg = StrandConfig(process="both", split=split_strand)
+    scfg = StrandConfig(process="both", strandless=strandless)
     ecfg = EngineConfig(
         engine=engine,
         mode=mode,
         threads=threads,
         region=region,
         count_indels=count_indels,
-        split_strand=split_strand,
+        strandless=strandless,
         vcf=vcf,
         read_expr=read_expr,
         pile_expr=pile_expr,

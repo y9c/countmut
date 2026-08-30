@@ -143,6 +143,20 @@ static inline int rf_equal(rf_key a, rf_key b) {
 KHASH_INIT(rfc, rf_key, int, 1, rf_hash, rf_equal)
 #define RF_CAP (1 << 15)
 
+/* -e read-constant memo for the pileup engine, keyed by the pileup slot
+ * pointer (p->b): htslib keeps the same bam1_t for one read across all the
+ * positions it covers, so an int-keyed slot hash lets us evaluate a
+ * read-constant expression once per read and reuse it for every appearance.
+ * A pos/qlen/qname verify guards against a recycled buffer now holding a
+ * different read.  Unlike the RF_CAP-based cache this survives deep hotspots
+ * (no global eviction: each mplp slot holds at most one read at a time). */
+typedef struct { int64_t pos; int qlen; char *qn; int pass; } expr_cc_t;
+static inline khint_t pex_hash(uintptr_t p) {
+    return (khint_t)(p >> 3) ^ ((khint_t)(p >> 13) & 0x0ff);
+}
+static inline int pex_equal(uintptr_t a, uintptr_t b) { return a == b; }
+KHASH_INIT(pex, uintptr_t, expr_cc_t, 1, pex_hash, pex_equal)
+
 /* BED / position-list region support (from bedidx.c, mirrors minipileup) */
 void *bed_read(const char *fn);
 int bed_overlap(const void *_h, const char *chr, int beg, int end);
@@ -158,6 +172,7 @@ typedef struct {
     void *inc_bed, *exc_bed;
     cm_expr *expr;   /* Lua -e / -p filters (NULL when none) */
     khash_t(rfc) *rfc; /* read_fails memo (pileup engine) */
+    khash_t(pex) *pexc; /* -e read-constant memo keyed by pileup slot (pileup) */
 } worker_t;
 
 static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
@@ -175,6 +190,7 @@ static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
     w->exc_bed = exclude ? bed_read(exclude) : NULL;
     w->expr = cm_expr_new(read_expr, pile_expr);
     w->rfc = kh_init(rfc);
+    w->pexc = kh_init(pex);
 }
 
 static void worker_free(worker_t *w) {
@@ -195,6 +211,11 @@ static void worker_free(worker_t *w) {
         for (khint_t k = kh_begin(w->rfc); k != kh_end(w->rfc); ++k)
             if (kh_exist(w->rfc, k)) free((void *)(uintptr_t)kh_key(w->rfc, k).qn);
         kh_destroy(rfc, w->rfc);
+    }
+    if (w->pexc) {
+        for (khint_t k = kh_begin(w->pexc); k != kh_end(w->pexc); ++k)
+            if (kh_exist(w->pexc, k)) free(kh_val(w->pexc, k).qn);
+        kh_destroy(pex, w->pexc);
     }
 }
 
@@ -222,6 +243,42 @@ static int _read_fails_cached(worker_t *w, const cm_config *cfg, const bam1_t *b
     return fails;
 }
 
+/* -e read filter, memoized by (ref_start, qname) WHEN the expression is
+ * read-constant (no per-base qpos/bq/base/ref/dist).  A read-constant
+ * expression yields the same result at every base of a read, so caching makes
+ * the pileup engine evaluate it once per read instead of once per position
+ * (the read-walk engine already does once per read).  Per-base expressions are
+ * evaluated at every aligned base, uncached. */
+static int expr_pass(worker_t *w, const bam1_t *b, const char *rname,
+                     const char *mrname, int s, int qpos, char ref_ch) {
+    cm_expr *x = w->expr;
+    if (x == NULL || !cm_expr_has_read(x)) return 1;
+    if (!cm_expr_read_constant(x))
+        return cm_expr_read(x, b, rname, mrname, qpos, s ? -1 : 1, ref_ch);
+    /* read-constant: memoize by the pileup slot pointer (stable per read
+     * across its span) with a pos/qlen/qname verify against recycling. */
+    uintptr_t slot = (uintptr_t)(const void *)b;
+    khint_t k = kh_get(pex, w->pexc, slot);
+    if (k != kh_end(w->pexc)) {
+        expr_cc_t *cc = &kh_val(w->pexc, k);
+        if (cc->pos == b->core.pos && cc->qlen == (int)b->core.l_qseq
+            && cc->qn && strcmp(cc->qn, bam_get_qname(b)) == 0)
+            return cc->pass;
+        free(cc->qn); cc->qn = NULL;
+    }
+    int pass = cm_expr_read(x, b, rname, mrname, 0, s ? -1 : 1, 'N');
+    if (k == kh_end(w->pexc)) {
+        int ret; k = kh_put(pex, w->pexc, slot, &ret);
+        memset(&kh_val(w->pexc, k), 0, sizeof(expr_cc_t)); /* fresh slots are uninitialized */
+    }
+    expr_cc_t *cc = &kh_val(w->pexc, k);
+    if (cc->qn == NULL) cc->qn = strdup(bam_get_qname(b));
+    cc->pos = b->core.pos;
+    cc->qlen = (int)b->core.l_qseq;
+    cc->pass = pass;
+    return pass;
+}
+
 typedef struct { int tid, beg, end; } region_t;
 
 typedef struct {
@@ -241,10 +298,11 @@ static void write_header(FILE *fp, const cm_config *cfg) {
     if (cfg->mode == CM_MODE_MUTATION) {
         fputs("chrom\tpos\tstrand\tmotif\tu0\tu1\tu2\tm0\tm1\tm2", fp);
         if (cfg->save_rest) fputs("\to0\to1\to2", fp);
+        fputs("\tmutation_rate", fp);
         fputc('\n', fp);
     } else if (cfg->mode == CM_MODE_BASE) {
-        if (cfg->split_strand) fputs("chrom\tpos\tstrand\tref\tdepth\ta\tc\tg\tt\tn", fp);
-        else fputs("chrom\tpos\tref\tdepth\ta\tc\tg\tt\tn", fp);
+        if (cfg->strandless) fputs("chrom\tpos\tref\tdepth\ta\tc\tg\tt\tn", fp);
+        else fputs("chrom\tpos\tstrand\tref\tdepth\ta\tc\tg\tt\tn", fp);
         if (cfg->count_indels) fputs("\tins\tdel\tref_skip\tfail", fp);
         fputc('\n', fp);
     } else {
@@ -272,6 +330,7 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
             int u0 = site->cnt[s][0][refi], m0 = site->cnt[s][0][muti];
             int u1 = site->cnt[s][1][refi], m1 = site->cnt[s][1][muti];
             int u2 = site->cnt[s][2][refi], m2 = site->cnt[s][2][muti];
+            int ut = u0 + u1 + u2, mt = m0 + m1 + m2;   /* total unconverted / converted */
             int o0 = site->cnt[s][0][0]+site->cnt[s][0][1]+site->cnt[s][0][2]+site->cnt[s][0][3]+site->cnt[s][0][4]-u0-m0;
             int o1 = site->cnt[s][1][0]+site->cnt[s][1][1]+site->cnt[s][1][2]+site->cnt[s][1][3]+site->cnt[s][1][4]-u1-m1;
             int o2 = site->cnt[s][2][0]+site->cnt[s][2][1]+site->cnt[s][2][2]+site->cnt[s][2][3]+site->cnt[s][2][4]-u2-m2;
@@ -291,10 +350,13 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
                     hdr->target_name[tid], (int)pos + 1, s ? '-' : '+', w->motif_buf,
                     u0, u1, u2, m0, m1, m2);
             if (cfg->save_rest) fprintf(fp, "\t%d\t%d\t%d", o0, o1, o2);
+            fprintf(fp, "\t%.4f",
+                    (ut + mt) ? (double)mt / (double)(ut + mt)
+                              : strtod("nan", (char **)NULL));
             fputc('\n', fp);
         }
     } else if (cfg->mode == CM_MODE_BASE) {
-        if (cfg->split_strand) {
+        if (!cfg->strandless) {
             for (int s = 0; s < 2; ++s) {
                 if (s == 0 && !emit_plus) continue;
                 if (s == 1 && !emit_minus) continue;
@@ -440,9 +502,12 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             if (s == 0) { if (qpos < cfg->trim_fragment_start || qlen - qpos <= cfg->trim_fragment_end) continue; }
             else { if (qpos < cfg->trim_fragment_end || qlen - qpos <= cfg->trim_fragment_start) continue; }
             if (read_trim_skip(b, qpos, cfg->trim_r1_end, cfg->trim_r2_start)) continue;
-            /* -e read filter (per aligned base; same spot as the Python engine) */
-            if (w->expr && cm_expr_has_read(w->expr)
-                && !cm_expr_read(w->expr, b, hdr->target_name[tid], qpos, s ? -1 : 1))
+            /* -e read filter (once per read when read-constant via exprc memo,
+             * else per aligned base; same spot as the Python engine) */
+            if (!expr_pass(w, b, hdr->target_name[tid],
+                           (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
+                               ? hdr->target_name[b->core.mtid] : "",
+                           s, qpos, ref_ch))
                 continue;
             int mapq = (int)b->core.qual;
             int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
@@ -625,8 +690,12 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
         if ((int)qpos < cfg->trim_fragment_end || (int)qlen - (int)qpos <= cfg->trim_fragment_start) return wins;
     }
     if (read_trim_skip(b, (int)qpos, cfg->trim_r1_end, cfg->trim_r2_start)) return wins;
-    if (w->expr && cm_expr_has_read(w->expr)
-        && !cm_expr_read(w->expr, b, hdr->target_name[tid], (int)qpos, s ? -1 : 1))
+    if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)
+        && !cm_expr_read(w->expr, b, hdr->target_name[tid],
+                         (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
+                             ? hdr->target_name[b->core.mtid] : "",
+                         (int)qpos, s ? -1 : 1,
+                         (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N'))
         return wins;
     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
     int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
@@ -749,6 +818,15 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         }
         /* else (paired but mate position unknown: mpos<0/mtid<0) ovl stays -1
          * -> every base goes through the hash = exact (never direct) */
+        /* read-constant -e filter: evaluate ONCE per read (not per base) and
+         * skip the whole read when it fails.  rw_add_base() then skips the
+         * per-base -e call for these (its decision is already known). */
+        if (w->expr && cm_expr_has_read(w->expr) && cm_expr_read_constant(w->expr)) {
+            const char *mrn = (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
+                                  ? hdr->target_name[b->core.mtid] : "";
+            if (!cm_expr_read(w->expr, b, hdr->target_name[tid], mrn, 0, s ? -1 : 1, 'N'))
+                continue;
+        }
         /* direct(ref_pos,qpos) = counts straight into the site (no dedup hash) */
 #define RW_DIRECT(_qpos) ((ovl == 0) || (ovl == 1 && ((int)(_qpos) < olo || (int)(_qpos) >= ohi)))
 

@@ -40,11 +40,12 @@ class TestGetOutputHeaders:
         """Test minimal headers without additional stats."""
         headers = get_output_headers(save_rest=False)
 
-        assert len(headers) == 10
+        assert len(headers) == 11
         assert headers[0] == "chrom"
         assert headers[1] == "pos"
         assert headers[2] == "strand"
         assert headers[3] == "motif"
+        assert headers[-1] == "mutation_rate"
         assert "o0" not in headers
         assert "o1" not in headers
         assert "o2" not in headers
@@ -53,11 +54,12 @@ class TestGetOutputHeaders:
         """Test headers with additional statistics."""
         headers = get_output_headers(save_rest=True)
 
-        assert len(headers) == 13
+        assert len(headers) == 14
         assert headers[0] == "chrom"
         assert "o0" in headers
         assert "o1" in headers
         assert "o2" in headers
+        assert headers[-1] == "mutation_rate"
 
 
 class TestWriteOutput:

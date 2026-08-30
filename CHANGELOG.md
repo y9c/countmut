@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`--mode` flag removed.**  There is one counting core; the output view is
+  inferred from the inputs: `--vcf` → allele, both `--ref-base`/`--mut-base` →
+  mutation view (with `mutation_rate`), otherwise base.  Giving exactly one
+  target is an error.  (`--mode` remains only as an internal backend/test
+  contract on the raw `countmut_core` binary.)
+- **`mutation_rate` column** in the mutation view: `m/(u+m)` across all tiers
+  (`nan` when there are no informative reads), appended after `m2` (`o0..o2`),
+  so the conversion rate is shown directly instead of only the raw `u`/`m`.
+  `get_output_headers()` updated to match (11 / 14 columns).
+- **`--split-strand` → `--strandless`** (base/allele view).  Output is
+  **per biological strand by default** (like mutation — so you can derive
+  conversion counts at any site from `strand`, `ref`, and `a/c/g/t/n`), and
+  `--strandless` collapses both strands into one row.  The old `--split-strand`
+  flag (which only re-confirmed the default) is removed.
+
+### Added
+- **samtools `filter=STRING` grammar** for `-e`/`-p` (embedded Lua 5.4 in the C
+  core):
+  - `[XX]` bracket-tag sugar (`[NM] <= 3`), `exists([XX])` presence idiom.
+  - `flag.<bit>` keywords (`flag.dup`, `flag.read1`, `flag.reverse`, ...).
+  - `A =~ "re"` / `A !~ "re"` POSIX-ERE regex sugar; `rname =~ 'rRNA.*'`.
+  - New read variables: `qname`, `mrname`/`rnext`, `tlen`/`insert_size`,
+    `sclen`/`hclen`/`ncigar`, `n_indel`, `soft_clips_5/3_prime`, `is_reverse`,
+    `is_paired`, `r1`/`r2`, `mtid`/`mpos`/`pnext`, `seq`/`sequence`, `qual`,
+    `library` (LB), per-base `base`/`ref`; pbr-style `read.*` fields
+    (`read.mapq`, `read.mapping_quality`, `read.qlen`, `read.length`, ...).
+  - htslib-style helpers: `length/min/max/avg` (string stats, raw bytes),
+    `re_match`/`re_find`, `sqrt/log/exp/pow`.
+- **Read-constant fast path**: filters touching only read-level values
+  (`mapq`, `flags`, `tlen`, `tag('XX')`, `rname`, ...) are detected at compile
+  time and evaluated **once per read** (pbr/samtools-style), instead of once
+  per aligned base.
+- Read-constant `-e` now runs once per read in **both** engines: read-walk
+  evaluates in the read loop (skipping failed reads wholesale); the pileup
+  engine memoises by pileup slot (verified pos/qlen/qname), so the base-mode
+  once-per-position cost is gone (base + `[NS] <= 3 and flag.read1 != 0`:
+  ~22 s -> ~8 s ≈ baseline; a regex filter ~93 s -> ~12 s).
+- **Per-base `-e` overhead cut ~3×** (measured full genome, ~78 M read-bases).
+  `cm_expr_read` now (a) computes `seq`/CIGAR stats **lazily** — only when the
+  expression references a field that needs them (no full read-sequence decode
+  or two CIGAR walks per eval), (b) skips the `CUR_READ_KEY` push unless the
+  expr uses `tag()/exists()/n5()/n3()`, and (c) populates the `read.`/`pile.`
+  table from a cached registry ref and **only when the expression uses dotted
+  access** (a bare predicate like `bq >= 20` skips the table entirely).  Simple
+  per-base filters went ~180 ns/eval -> ~55 ns/eval; e.g. full-genome pileup
+  `bq >= 20` overhead +10.9 s -> +4.3 s, and read-walk mutation evaluates ~3×
+  fewer bases (only `--ref-base` positions) so per-base filters are cheapest
+  there.
+- Lazy variable materialisation: only the fields an expression actually
+  references are populated, so `-e` adds ~0 overhead to the C counting loop.
+
+### Fixed
+- **Pileup engine evaluated per-base `-e` with qpos=0** (regression from the
+  read-constant memo): `expr_pass` dropped the read position, so `dist5`/`dist3`
+  used qpos 0 (silently dropping all forward reads), `base` tested `seq[0]`
+  instead of the aligned base, and `bq` used the read's first base.  Now the
+  real `p->qpos` and site `ref_ch` are threaded through; qpos-dependent filters
+  are byte-identical between engines again (regression test added).
+- Bare call predicates (`rname =~ 'x'` -> `re_match(...)`), which previously
+  loaded as a nil-returning Lua call statement, are now always wrapped in
+  `return (...)`.
+- `read.*` dotted field access now triggers the per-field population correctly.
+- `length` (function) no longer collides with the `read.length` field.
+- Unprotected Lua errors no longer abort the process (setup is guarded so an
+  expression error rejects the item and is reported, never fatal).
+
 ## [0.1.6] - 2026-08-30
 
 ### Changed

@@ -46,11 +46,14 @@ def get_output_headers(save_rest: bool = False) -> list[str]:
     - x0 (low quality): Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
     - x1 (insufficient conversion): Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
     - x2 (high conversion): Bases from reads with high conversion efficiency (low Zf and high Yf)
+
+    ``mutation_rate`` = m/(u+m) across all tiers (NaN when no informative reads).
     """
     headers = ["chrom", "pos", "strand", "motif"]
     base_cols = ["u0", "u1", "u2", "m0", "m1", "m2"]
     if save_rest:
         base_cols += ["o0", "o1", "o2"]
+    base_cols += ["mutation_rate"]
     headers.extend(base_cols)
     return headers
 

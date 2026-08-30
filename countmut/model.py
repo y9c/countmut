@@ -57,7 +57,7 @@ class StrandConfig:
     """Which biological strand(s) to report."""
 
     process: str = "both"  # 'both' | 'forward' | 'reverse'
-    split: bool = True  # emit separate '+'/'-' rows (False = sum both strands)
+    strandless: bool = False  # True = sum both strands into one row (base/allele)
 
 
 @dataclass
@@ -65,7 +65,7 @@ class EngineConfig:
     """Selects the BAM walk strategy (both are implemented in the C core)."""
 
     engine: str = "auto"  # 'auto' | 'read-walk' | 'pileup'
-    mode: str = "mutation"  # 'mutation' | 'base' | 'allele'
+    mode: str = "mutation"  # 'auto' | 'mutation' | 'base' | 'allele'
     bin_size: int = 10_000
     threads: int | None = None
     region: str | None = None
@@ -76,5 +76,5 @@ class EngineConfig:
     # allele / output
     vcf: bool = False  # allele mode: emit VCF
     count_indels: bool = False
-    split_strand: bool = True
+    strandless: bool = False  # base/allele: collapse '+'/'-' into one row
     verbose: bool = False  # real-time per-region progress on stderr
