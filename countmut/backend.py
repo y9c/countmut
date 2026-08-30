@@ -100,7 +100,7 @@ def _build_cmd(
         "--threads",
         str(ecfg.threads or min(os.cpu_count() or 1, 8)),
         "--max-depth",
-        str(fcfg.max_depth),   # 0 = unlimited
+        str(fcfg.max_depth),  # 0 = unlimited
     ]
     if fcfg.max_unc is not None:
         cmd += ["--max-unc", str(fcfg.max_unc)]
@@ -205,12 +205,12 @@ def run_backend(
     stdout = ""
     if ecfg.verbose:
         # stream the C core's stderr (progress) to our stderr in real time
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
         import threading
 
-        fwd = threading.Thread(
-            target=_forward_stderr, args=(proc.stderr,), daemon=True
-        )
+        fwd = threading.Thread(target=_forward_stderr, args=(proc.stderr,), daemon=True)
         fwd.start()
         out, _ = proc.communicate()
         fwd.join(timeout=2)

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-08-30
+
+### Performance
+- **read-walk engine: solo-vs-overlap counting.**  Only reads whose mate can
+  also cover a base go through the `(pos,qname)` overlap-dedup hash; bases that
+  only one mate can cover (solo bases, single-end reads, mates on another
+  contig) are counted **directly into the site**.  This removes the huge
+  accumulating dedup hash at deep sites, where previously every fragment ×
+  target base inserted an entry (~10M entries at a 50k-deep rRNA site).
+  Overlapping mates are still deduped exactly; unknown mate geometry (mpos<0 /
+  TLEN unusable) keeps the exact hash path for those reads.
+- **Effect on the deep PE transcriptome BAM** (784k reads, rRNA hotspots
+  ~50–100k depth):
+  - full-genome mutation read-walk: **74 s -> 5.9 s** (pileup: 3.4 s)
+  - deep rRNA region read-walk: **60.7 s -> 4.3 s** (old binary: 60.7 s)
+- Read-walk now also matches pileup on sparse BAMs (82k reads / 41k
+  transcripts: read-walk 0.84 s vs pileup 0.90 s).
+- Verified: read-walk == pileup byte-identical on all fixtures/modes; the
+  overlap-dedup depth stays exact (10 fragments -> depth 10); full test suite
+  (46) passes; output is unchanged for the intended overlapping-mate case.
+
 ## [0.1.4] - 2026-08-30
 
 ### Fixed / changed

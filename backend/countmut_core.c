@@ -590,12 +590,15 @@ static int tgt_lower_bound(const int *a, int n, int v) {
 
 /* Add one matched base to the (pos,qname) dedup table.  Applies the mutation
  * target gate (skipped when `already_target`), trim (is_internal), the -e
- * filter and the (mapq,read1,qual) preference exactly like the per-base slow
- * path.  `qid` is the read's qname id (resolved once per read).  Returns the
- * (possibly reallocated) wins array. */
+ * filter and the (mapq,read1,qual) preference.  When `direct` is set the base
+ * sits outside any mate-overlap region (or the read is single-end / only one
+ * mate covers), so it is counted straight into the site with no hash -- the
+ * fragment contributes that base exactly once either way, keeping output
+ * identical for the intended (overlapping-mate) dedup.  `qid` is the read's
+ * qname id (resolved once per read).  Returns the (possibly reallocated) wins. */
 static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int tid,
                          const bam1_t *b, int s, int64_t ref_pos, uint32_t qpos,
-                         int qid, int already_target,
+                         int qid, int already_target, int direct, sitemap_t *sm,
                          khash_t(posq) *h, rw_w *wins, int *wins_cap, int *wins_n) {
     uint32_t qlen = b->core.l_qseq;
     if (qpos >= qlen) return wins;
@@ -613,6 +616,12 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
     int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
     int qual = (int)bam_get_qual(b)[qpos];
+    if (direct) {
+        int cat = (cfg->mode == CM_MODE_MUTATION)
+            ? ((qual >= cfg->min_baseq) ? 2 : 0) : 0;
+        sm_get(sm, ref_pos)->cnt[s][cat][base_i]++;
+        return wins;
+    }
     int mapq = (int)b->core.qual;
     int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
     posq_key key = { ref_pos, qid };
@@ -704,6 +713,30 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         }
         const uint32_t *cig = bam_get_cigar(b);
 
+        /* Solo-vs-overlap for the overlap dedup: a base is "direct" (counted
+         * straight into the site) unless this read's mate can also cover it.
+         * Only single-end reads / mates on another contig are guaranteed solo
+         * (all-direct).  Overlapping mates with known geometry use the hybrid
+         * path; anything uncertain (mpos<0 / TLEN unusable) keeps the exact
+         * hash for every base.
+         *   read1 overlap: qpos >= ins - r     read2: qpos < 2r - ins */
+        int ovl = -1, olo = 0, ohi = (int)qlen;
+        if (!(b->core.flag & BAM_FPAIRED)) ovl = 0;                       /* single-end: no mate */
+        else if (b->core.mtid >= 0 && b->core.mtid != b->core.tid) ovl = 0; /* mate known elsewhere */
+        else if (b->core.mpos >= 0 && b->core.mtid == b->core.tid) {
+            /* same-contig mate: hybrid, if the insert geometry is usable */
+            int insv = (int)b->core.isize; if (insv < 0) insv = -insv;
+            if (insv > 0 && insv < 2 * (int)qlen) {
+                ovl = 1;
+                if (b->core.flag & BAM_FREAD1) olo = insv - (int)qlen;
+                else ohi = 2 * (int)qlen - insv;
+            }
+        }
+        /* else (paired but mate position unknown: mpos<0/mtid<0) ovl stays -1
+         * -> every base goes through the hash = exact (never direct) */
+        /* direct(ref_pos,qpos) = counts straight into the site (no dedup hash) */
+#define RW_DIRECT(_qpos) ((ovl == 0) || (ovl == 1 && ((int)(_qpos) < olo || (int)(_qpos) >= ohi)))
+
         if (tgt && !cigar_has_indels(b)) {
             /* fast path: indel-free read -> jump straight to target positions */
             int64_t r_start = b->core.pos;
@@ -714,9 +747,9 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
             for (int ti = tgt_lower_bound(tgt, tgt_n, (int)lo); ti < tgt_n; ++ti) {
                 int64_t ref_pos = tgt[ti];
                 if (ref_pos >= hi) break;
-                wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos,
-                                   (uint32_t)((ref_pos - r_start) + sc),
-                                   qid, 1,
+                uint32_t qpos = (uint32_t)((ref_pos - r_start) + sc);
+                wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
+                                   qid, 1, RW_DIRECT(qpos), &sm,
                                    h, wins, &wins_cap, &wins_n);
             }
         } else {
@@ -732,7 +765,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                         uint32_t qpos = qcur + (uint32_t)k;
                         if (qpos >= qlen) break;
                         wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
-                                           qid, 0,
+                                           qid, 0, RW_DIRECT(qpos), &sm,
                                            h, wins, &wins_cap, &wins_n);
                     }
                     qcur += (uint32_t)len; rcur += len;

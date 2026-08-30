@@ -317,6 +317,65 @@ def test_expr_identical_both_engines(motif_data):
         assert rw == pl, f"engines diverged with -e {expr!r}"
 
 
+# ---------------------------------------------------------------------------
+# read-walk solo/direct fast path must still dedup overlapping mates exactly
+# ---------------------------------------------------------------------------
+def test_readwalk_proper_paired_overlap_dedup(tmp_path):
+    """A proper pair (mpos + template length set -> hybrid read-walk path)
+    must still count an overlapping position once."""
+    root = str(tmp_path / "pw")
+    os.makedirs(root, exist_ok=True)
+    fa = os.path.join(root, "ref.fa")
+    bam = os.path.join(root, "p.bam")
+    with open(fa, "w") as f:
+        f.write(">chr1\n" + "ACGT" * 5 + "\n")
+    pysam.faidx(fa)
+    hdr = pysam.AlignmentHeader.from_dict(
+        {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20}]}
+    )
+    seq = "ACGT" * 5
+    a = pysam.AlignedSegment(hdr)
+    a.query_name = "p"
+    a.flag = 99
+    a.reference_id = 0
+    a.reference_start = 0
+    a.mapping_quality = 60
+    a.cigarstring = "10M"
+    a.query_sequence = seq[0:10]
+    a.query_qualities = pysam.qualitystring_to_array("I" * 10)
+    a.next_reference_id = 0
+    a.next_reference_start = 6
+    a.template_length = 16
+    b = pysam.AlignedSegment(hdr)
+    b.query_name = "p"
+    b.flag = 147
+    b.reference_id = 0
+    b.reference_start = 6
+    b.mapping_quality = 60
+    b.cigarstring = "10M"
+    b.query_sequence = seq[6:16]
+    b.query_qualities = pysam.qualitystring_to_array("I" * 10)
+    b.next_reference_id = 0
+    b.next_reference_start = 0
+    b.template_length = -16
+    with pysam.AlignmentFile(bam, "wb", header=hdr) as out:
+        out.write(a)
+        out.write(b)
+    pysam.index(bam)
+    _h, rows = run_c(
+        bam,
+        fa,
+        mode="base",
+        engine="read-walk",
+        region="chr1:1-20",
+        extra=["--trim-start", "0", "--trim-end", "0"],
+    )
+    # overlap is 1-based 7..10 (0-based 6..9); each must have exactly depth 1
+    for pos in (7, 8, 9, 10):
+        row = [r for r in rows if r[1] == pos]
+        assert row and row[0][4] == 1, (pos, row)
+
+
 def test_expr_invalid_syntax(motif_data):
     bam, fa = motif_data
     # C validates the Lua up-front and exits 2 on a syntax error.
