@@ -58,6 +58,7 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
 	char buf[4];
 	int magic_len, has_EOF;
 	int32_t i = 1, name_len;
+	if (fp == NULL) return NULL;  // caller must report the open failure
 	// check EOF
 	has_EOF = bgzf_check_EOF(fp);
 	if (has_EOF < 0) {

@@ -58,14 +58,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there.
 - Lazy variable materialisation: only the fields an expression actually
   references are populated, so `-e` adds ~0 overhead to the C counting loop.
+- **Dynamic work queue** for `--threads` (regions are claimed atomically and
+  worker temp files are re-assembled in genome order via recorded spans),
+  so a few ultra-deep bins no longer serialize on one static worker slice.
+  Measured on a bimodal benchmark (2 rRNA-hotspot contigs at ~3k depth among
+  3,002 contigs): read-walk mutation `@16` 1.56 s -> 0.90 s, pileup base
+  1.01 s -> 0.64 s; output is byte-identical at any thread count.
+- **Reproducible benchmark fixture generator**: `tests/make_bench_bam.py`
+  builds a bimodal (shallow body + deep hotspots) transcriptome-like BAM.
 
 ### Fixed
+- **Clean errors for missing/corrupt inputs** — a nonexistent BAM used to
+  segfault in `bam_hdr_read` (unchecked `bgzf_open` NULL); now it prints
+  `[countmut] error: cannot open BAM file ...` and exits 3.  Also guards the
+  per-worker BAM/index/FASTA opens and the temp-file creation.
 - **Pileup engine evaluated per-base `-e` with qpos=0** (regression from the
   read-constant memo): `expr_pass` dropped the read position, so `dist5`/`dist3`
   used qpos 0 (silently dropping all forward reads), `base` tested `seq[0]`
   instead of the aligned base, and `bq` used the read's first base.  Now the
   real `p->qpos` and site `ref_ch` are threaded through; qpos-dependent filters
   are byte-identical between engines again (regression test added).
+- **Expression translator buffer overflow** with long runs of unary `!`
+  (`!` -> `not ` is a 4x expansion; the buffer was sized 2x).
+- **`seq`/`qual`/`base` truncated at 1023 bp** for long reads (ONT).
 - Bare call predicates (`rname =~ 'x'` -> `re_match(...)`), which previously
   loaded as a nil-returning Lua call statement, are now always wrapped in
   `return (...)`.

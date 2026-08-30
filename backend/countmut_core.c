@@ -281,6 +281,11 @@ static int expr_pass(worker_t *w, const bam1_t *b, const char *rname,
 
 typedef struct { int tid, beg, end; } region_t;
 
+/* record of which worker owns which region's rows in that worker's temp file,
+ * so the final output can be re-assembled in global region order regardless of
+ * the (dynamic) claim order */
+typedef struct { int worker; long off; long len; } span_t;
+
 typedef struct {
     const cm_config *cfg;
     bam_hdr_t *hdr;
@@ -288,6 +293,8 @@ typedef struct {
     region_t *regions;
     int nregions;
     volatile int done;
+    volatile int next;   /* next region to claim (dynamic work queue) */
+    span_t *spans;
     FILE **files;
     worker_t *workers;
     int nthreads;
@@ -946,20 +953,23 @@ static void *thread_main(void *arg) {
     targ_t *ta = (targ_t *)arg;
     worker_t *w = &ta->s->workers[ta->wi];
     work_t *s = ta->s;
-    /* each worker owns a contiguous slice of regions and one temp file, so the
-     * number of open temp files == nthreads (not nregions, which could exhaust
-     * the fd limit on genomes with many contigs) */
-    int base = (s->nregions + s->nthreads - 1) / s->nthreads;
-    int lo = ta->wi * base;
-    int hi = lo + base; if (hi > s->nregions) hi = s->nregions;
+    FILE *wf = s->files[ta->wi];   /* one temp file per worker (bounded fd count) */
     const int step = s->nregions > 100 ? s->nregions / 100 : 1;
-    for (int i = lo; i < hi; ++i) {
+    for (;;) {
+        int i = __sync_fetch_and_add(&s->next, 1);   /* dynamic claim, keeps deep
+                                                      * bins from serializing on
+                                                      * one static slice */
+        if (i >= s->nregions) break;
+        long off = ftell(wf);
         if (s->cfg->engine == CM_ENGINE_READWALK)
-            count_interval_readwalk(w, s->cfg, s->hdr, s->files[ta->wi],
+            count_interval_readwalk(w, s->cfg, s->hdr, wf,
                                     s->regions[i].tid, s->regions[i].beg, s->regions[i].end);
         else
-            count_interval(w, s->cfg, s->hdr, s->files[ta->wi],
+            count_interval(w, s->cfg, s->hdr, wf,
                            s->regions[i].tid, s->regions[i].beg, s->regions[i].end);
+        s->spans[i].worker = ta->wi;
+        s->spans[i].off = off;
+        s->spans[i].len = ftell(wf) - off;
         if (s->cfg->verbose) {
             int done = __sync_add_and_fetch(&s->done, 1);
             if (done % step == 0 || done == s->nregions)
@@ -1007,9 +1017,18 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     FILE *fp = (out_path && strcmp(out_path, "-") != 0) ? fopen(out_path, "w") : stdout;
     if (!fp) return 1;
     BGZF *hfp = bgzf_open(bam, "r");
+    if (!hfp) {
+        fprintf(stderr, "[countmut] error: cannot open BAM file '%s'\n", bam);
+        if (fp != stdout) fclose(fp);
+        return 3;
+    }
     bam_hdr_t *hdr = bam_hdr_read(hfp);
     bgzf_close(hfp);
-    if (!hdr) { if (fp != stdout) fclose(fp); return 3; }
+    if (!hdr) {
+        fprintf(stderr, "[countmut] error: cannot read BAM header from '%s'\n", bam);
+        if (fp != stdout) fclose(fp);
+        return 3;
+    }
 
     int nthreads = cfg->threads < 1 ? 1 : cfg->threads;
     int nregions = 0;
@@ -1022,15 +1041,47 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     /* bounded temp files: one per worker (contiguous region slices), not one
      * per region -- an all-contigs run can have tens of thousands of regions */
     FILE **files = (FILE **)calloc(nthreads, sizeof(FILE *));
-    for (int i = 0; i < nthreads; ++i) files[i] = tmpfile();
+    for (int i = 0; i < nthreads; ++i) {
+        files[i] = tmpfile();
+        if (!files[i]) {
+            fprintf(stderr, "[countmut] error: cannot create temp output file\n");
+            for (int j = 0; j < i; ++j) fclose(files[j]);
+            free(files); bam_hdr_destroy(hdr);
+            if (fp != stdout) fclose(fp);
+            return 1;
+        }
+    }
     worker_t *workers = (worker_t *)calloc(nthreads, sizeof(worker_t));
     for (int i = 0; i < nthreads; ++i)
         worker_init(&workers[i], bam, fa, cfg->pad, cfg->bedfile, cfg->exclude,
                     cfg->read_expr, cfg->pile_expr);
+    for (int i = 0; i < nthreads; ++i) {
+        if (!workers[i].fp || !workers[i].idx) {
+            fprintf(stderr, "[countmut] error: cannot open BAM/index '%s'\n", bam);
+            goto fail_workers;
+        }
+        if (!workers[i].fai) {
+            fprintf(stderr, "[countmut] error: cannot load reference FASTA '%s'\n", fa);
+            goto fail_workers;
+        }
+    }
+    { /* success path continues below */ }
+    goto input_ok;
+fail_workers:
+    for (int i = 0; i < nthreads; ++i) worker_free(&workers[i]);
+    free(workers);
+    for (int i = 0; i < nthreads; ++i) fclose(files[i]);
+    free(files);
+    bam_hdr_destroy(hdr);
+    if (fp != stdout) fclose(fp);
+    return 3;
+input_ok:
+    ;
 
     work_t s;
     s.cfg = cfg; s.hdr = hdr; s.bam = bam;
-    s.regions = regs; s.nregions = nregions; s.done = 0;
+    s.regions = regs; s.nregions = nregions; s.done = 0; s.next = 0;
+    s.spans = (span_t *)calloc(nregions, sizeof(span_t));
     s.files = files; s.workers = workers; s.nthreads = nthreads;
 
     pthread_t *tds = (pthread_t *)calloc(nthreads, sizeof(pthread_t));
@@ -1042,15 +1093,26 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     for (int i = 0; i < nthreads; ++i) pthread_join(tds[i], NULL);
     free(targs);
 
-    /* concatenate worker slices in worker order -> global region order */
-    for (int i = 0; i < nthreads; ++i) {
-        fflush(files[i]); rewind(files[i]);
-        char buf[16384]; size_t r;
-        while ((r = fread(buf, 1, sizeof(buf), files[i])) > 0) fwrite(buf, 1, r, fp);
-        fclose(files[i]);
+    /* re-assemble worker temp files in GLOBAL region order using the recorded
+     * spans (the dynamic queue claims regions out of order) */
+    for (int i = 0; i < nthreads; ++i) fflush(files[i]);
+    char buf[16384];
+    for (int i = 0; i < nregions; ++i) {
+        int w = s.spans[i].worker;
+        long remain = s.spans[i].len;
+        if (remain <= 0) continue;
+        fseek(files[w], s.spans[i].off, SEEK_SET);
+        while (remain > 0) {
+            size_t chunk = remain > (long)sizeof(buf) ? sizeof(buf) : (size_t)remain;
+            size_t got = fread(buf, 1, chunk, files[w]);
+            if (got == 0) break;
+            fwrite(buf, 1, got, fp);
+            remain -= (long)got;
+        }
     }
+    for (int i = 0; i < nthreads; ++i) fclose(files[i]);
 
-    free(tds); free(files);
+    free(s.spans); free(tds); free(files);
     for (int i = 0; i < nthreads; ++i) worker_free(&workers[i]);
     free(workers); free(regs);
     bam_hdr_destroy(hdr);
