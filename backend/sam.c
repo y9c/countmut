@@ -183,8 +183,8 @@ int bam_cigar2qlen(int n_cigar, const uint32_t *cigar)
 {
 	int k, l;
 	for (k = l = 0; k < n_cigar; ++k)
-		if (bam_cigar_type(bam_cigar_op(cigar[k]))&1)
-			l += bam_cigar_oplen(cigar[k]);
+		if (bam_cigar_type(bam_cigar_op_p(&cigar[k]))&1)
+			l += bam_cigar_oplen_p(&cigar[k]);
 	return l;
 }
 
@@ -192,8 +192,8 @@ int bam_cigar2rlen(int n_cigar, const uint32_t *cigar)
 {
 	int k, l;
 	for (k = l = 0; k < n_cigar; ++k)
-		if (bam_cigar_type(bam_cigar_op(cigar[k]))&2)
-			l += bam_cigar_oplen(cigar[k]);
+		if (bam_cigar_type(bam_cigar_op_p(&cigar[k]))&2)
+			l += bam_cigar_oplen_p(&cigar[k]);
 	return l;
 }
 
@@ -250,7 +250,7 @@ int bam_tag2cigar(bam1_t *b)
 	// test where there is a real CIGAR in the CG tag to move
 	if (c->n_cigar == 0 || c->tid < 0 || c->pos < 0) return 0;
 	cigar0 = bam_get_cigar(b);
-	if (bam_cigar_op(cigar0[0]) != BAM_CSOFT_CLIP || bam_cigar_oplen(cigar0[0]) != c->l_qseq) return 0;
+	if (bam_cigar_op_p(cigar0) != BAM_CSOFT_CLIP || bam_cigar_oplen_p(cigar0) != c->l_qseq) return 0;
 	fake_bytes = c->n_cigar * 4;
 	if ((CG = bam_aux_get(b, "CG")) == 0) return 0; // no CG tag
 	if (CG[0] != 'B' || CG[1] != 'I') return 0; // not of type B,I
@@ -716,8 +716,8 @@ int sam_format1(const bam_hdr_t *h, const bam1_t *b, kstring_t *str)
 	if (c->n_cigar) { // cigar
 		uint32_t *cigar = bam_get_cigar(b);
 		for (i = 0; i < c->n_cigar; ++i) {
-			kputw(bam_cigar_oplen(cigar[i]), str);
-			kputc(bam_cigar_opchr(cigar[i]), str);
+			kputw(bam_cigar_oplen_p(&cigar[i]), str);
+			kputc(bam_cigar_opchr(bam_cigar_op_p(&cigar[i])), str);
 		}
 	} else kputc('*', str);
 	kputc('\t', str);
@@ -959,6 +959,11 @@ static inline int resolve_cigar2(bam_pileup1_t *p, int32_t pos, cstate_t *s)
 	bam1_t *b = p->b;
 	bam1_core_t *c = &b->core;
 	uint32_t *cigar = bam_get_cigar(b);
+	uint32_t alcig[64];
+	if (c->n_cigar > 0 && c->n_cigar <= 64) { // align the packed CIGAR for portable reads
+		memcpy(alcig, cigar, c->n_cigar * 4);
+		cigar = alcig;
+	}
 	int k;
 	// determine the current CIGAR operation
 //	fprintf(stderr, "%s\tpos=%d\tend=%d\t(%d,%d,%d)\n", bam1_qname(b), pos, s->end, s->k, s->x, s->y);

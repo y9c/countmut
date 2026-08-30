@@ -191,9 +191,9 @@ static void ref_span(const bam1_t *b, int *rlen) {
     int r = 0;
     const uint32_t *cig = bam_get_cigar(b);
     for (uint32_t i = 0; i < b->core.n_cigar; ++i) {
-        int op = (int)bam_cigar_op(cig[i]);
+        int op = (int)bam_cigar_op_p(&cig[i]);
         if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8)
-            r += (int)bam_cigar_oplen(cig[i]);
+            r += (int)bam_cigar_oplen_p(&cig[i]);
     }
     *rlen = r;
 }
@@ -205,8 +205,8 @@ static void cigar_stats(const bam1_t *b, int *sclen, int *hclen, int *n_indel,
     int sc = 0, hc = 0, ni = 0, s5 = 0, s3 = 0;
     const uint32_t *cig = bam_get_cigar(b);
     for (uint32_t i = 0; i < b->core.n_cigar; ++i) {
-        int op = (int)bam_cigar_op(cig[i]);
-        int len = (int)bam_cigar_oplen(cig[i]);
+        int op = (int)bam_cigar_op_p(&cig[i]);
+        int len = (int)bam_cigar_oplen_p(&cig[i]);
         switch (op) {
         case 4: sc += len; break;
         case 5: hc += len; break;
@@ -214,9 +214,9 @@ static void cigar_stats(const bam1_t *b, int *sclen, int *hclen, int *n_indel,
         default: break;
         }
     }
-    if (b->core.n_cigar >= 1 && (int)bam_cigar_op(cig[0]) == 4) s5 = (int)bam_cigar_oplen(cig[0]);
-    if (b->core.n_cigar >= 2 && (int)bam_cigar_op(cig[b->core.n_cigar - 1]) == 4)
-        s3 = (int)bam_cigar_oplen(cig[b->core.n_cigar - 1]);
+    if (b->core.n_cigar >= 1 && (int)bam_cigar_op_p(&cig[0]) == 4) s5 = (int)bam_cigar_oplen_p(&cig[0]);
+    if (b->core.n_cigar >= 2 && (int)bam_cigar_op_p(&cig[b->core.n_cigar - 1]) == 4)
+        s3 = (int)bam_cigar_oplen_p(&cig[b->core.n_cigar - 1]);
     *sclen = sc; *hclen = hc; *n_indel = ni; *soft5 = s5; *soft3 = s3;
 }
 
@@ -352,8 +352,17 @@ static char *translate_ops(const char *src0) {
         if (c == '[' && i + 3 < n && isalnum((unsigned char)src[i + 1])
             && isalnum((unsigned char)src[i + 2]) && src[i + 3] == ']') {
             /* inside exists( ... ) -> exists('XX') (the htslib idiom);
-             * anywhere else -> tag('XX') */
-            if (j >= 7 && memcmp(out + j - 7, "exists(", 7) == 0) {
+             * anywhere else -> tag('XX').  Tolerate spacing: `exists([XX]`,
+             * `exists ([XX]`, `exists( [XX]`. */
+            size_t q = j;
+            while (q > 0 && out[q - 1] == ' ') q--;          /* spaces after '(' */
+            int in_exists = (q >= 8 && out[q - 1] == '(');
+            if (in_exists) {
+                size_t b = q - 1;
+                while (b > 0 && out[b - 1] == ' ') b--;      /* spaces before '(' */
+                in_exists = (b >= 6 && memcmp(out + (b - 6), "exists", 6) == 0);
+            }
+            if (in_exists) {
                 out[j++] = '\''; out[j++] = src[i + 1]; out[j++] = src[i + 2];
                 out[j++] = '\'';
             } else {

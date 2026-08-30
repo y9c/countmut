@@ -2,8 +2,24 @@
 #define BAM_H
 
 #include <stdint.h>
+#include <string.h>
 #include "bgzf.h"
 #include "hts.h"
+
+/* Portable little-endian u32 load that tolerates unaligned addresses.  BAM
+ * records store the CIGAR packed into the record buffer right after the read
+ * name (offset data + l_qname), which is frequently not 4-byte aligned;
+ * dereferencing the CIGAR as uint32_t* is undefined behaviour by the C
+ * standard (UBSan flags it; strict-alignment platforms can fault).  Real
+ * htslib ships this wart; we read every packed CIGAR word through memcpy. */
+static inline uint32_t bam_pe32(const void *p)
+{
+	uint32_t v;
+	memcpy(&v, p, 4);
+	return v;
+}
+#define bam_cigar_op_p(p)  bam_cigar_op(bam_pe32(p))
+#define bam_cigar_oplen_p(p) bam_cigar_oplen(bam_pe32(p))
 
 /**********************
  *** SAM/BAM header ***

@@ -23,6 +23,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include "sam.h"
 #include "faidx.h"
@@ -644,16 +645,16 @@ static uint32_t cigar_ref_len(const bam1_t *b) {
     const uint32_t *cig = bam_get_cigar(b);
     uint32_t r = 0;
     for (int i = 0; i < b->core.n_cigar; ++i) {
-        int op = (int)bam_cigar_op(cig[i]);
+        int op = (int)bam_cigar_op_p(&cig[i]);
         if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8)
-            r += (uint32_t)bam_cigar_oplen(cig[i]);
+            r += (uint32_t)bam_cigar_oplen_p(&cig[i]);
     }
     return r;
 }
 static int cigar_has_indels(const bam1_t *b) {
     const uint32_t *cig = bam_get_cigar(b);
     for (int i = 0; i < b->core.n_cigar; ++i) {
-        int op = (int)bam_cigar_op(cig[i]);
+        int op = (int)bam_cigar_op_p(&cig[i]);
         if (op == 1 || op == 2 || op == 3) return 1;
     }
     return 0;
@@ -662,8 +663,8 @@ static uint32_t cigar_leading_softclips(const bam1_t *b) {
     const uint32_t *cig = bam_get_cigar(b);
     uint32_t sc = 0;
     for (int i = 0; i < b->core.n_cigar; ++i) {
-        int op = (int)bam_cigar_op(cig[i]);
-        if (op == 4) sc += (uint32_t)bam_cigar_oplen(cig[i]);
+        int op = (int)bam_cigar_op_p(&cig[i]);
+        if (op == 4) sc += (uint32_t)bam_cigar_oplen_p(&cig[i]);
         else break;   /* soft-clips only at the 5' end before the first M */
     }
     return sc;
@@ -771,7 +772,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
             const uint32_t *cig = bam_get_cigar(b);
             int64_t rcur = b->core.pos;
             for (int i = 0; i < b->core.n_cigar; ++i) {
-                int op = (int)bam_cigar_op(cig[i]); int len = (int)bam_cigar_oplen(cig[i]);
+                int op = (int)bam_cigar_op_p(&cig[i]); int len = (int)bam_cigar_oplen_p(&cig[i]);
                 if (op == 0 || op == 2 || op == 3 || op == 7 || op == 8) { /* consumes ref */
                     if (rcur < end && rcur + len > beg) {
                         int64_t lo = rcur > beg ? rcur : beg;
@@ -856,7 +857,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
             uint32_t qcur = 0;
             int64_t rcur = b->core.pos;
             for (int i = 0; i < b->core.n_cigar; ++i) {
-                int op = (int)bam_cigar_op(cig[i]); int len = (int)bam_cigar_oplen(cig[i]);
+                int op = (int)bam_cigar_op_p(&cig[i]); int len = (int)bam_cigar_oplen_p(&cig[i]);
                 switch (op) {
                 case 0: case 7: case 8: /* M, =, X -- matched bases */
                     for (int k = 0; k < len; ++k) {
@@ -1013,9 +1014,103 @@ static region_t *build_regions(bam_hdr_t *hdr, int threads, const char *region, 
     *n_out = n; return regs;
 }
 
+/* ---- input format support -----------------------------------------------
+ * BAM: native (BGZF + BAI index).
+ * SAM (plain or gzipped): transcoded once to a temp BAM + BAI so the whole
+ * indexed, multi-threaded pipeline is reused unchanged (identical output to
+ * running on the equivalent BAM).
+ * CRAM: NOT supported in this self-contained core (no CRAM codec); we fail
+ * with a conversion hint instead of a confusing crash.
+ * Returns 0=BAM, 1=SAM(transcoded), 2=CRAM(unsupported), -1=error. */
+static int detect_input_format(const char *path, int *is_sam) {
+    unsigned char magic[4] = {0};
+    gzFile gz = gzopen(path, "rb");
+    if (gz == NULL) return -1;
+    int n = (int)gzread(gz, magic, 4);
+    gzclose(gz);
+    if (n >= 4 && memcmp(magic, "BAM\1", 4) == 0) { *is_sam = 0; return 0; }
+    if (n >= 4 && memcmp(magic, "CRAM", 4) == 0)   { *is_sam = 0; return 2; }
+    *is_sam = 1; return 1;   /* SAM text (or empty -> header parse fails later with a clear error) */
+}
+
+static int transcode_sam_to_bam(const char *sam, char *tmp_bam, size_t cap) {
+    htsFile *in = hts_open(sam, "r", NULL);
+    if (in == NULL || in->is_bin) {
+        fprintf(stderr, "[countmut] error: cannot open SAM input '%s'\n", sam);
+        if (in) hts_close(in);
+        return -1;
+    }
+    bam_hdr_t *hdr = sam_hdr_read(in);
+    if (hdr == NULL) {
+        fprintf(stderr, "[countmut] error: cannot parse SAM header from '%s'\n", sam);
+        hts_close(in);
+        return -1;
+    }
+    const char *td = getenv("TMPDIR");
+    if (td == NULL || *td == '\0') td = "/tmp";
+    char tpl[1024];
+    snprintf(tpl, sizeof(tpl), "%s/countmut_sam_XXXXXX", td);
+    int fd = mkstemp(tpl);
+    if (fd < 0) {
+        fprintf(stderr, "[countmut] error: cannot create temp file for SAM input\n");
+        bam_hdr_destroy(hdr); hts_close(in);
+        return -1;
+    }
+    close(fd);
+    unlink(tpl);                          /* we only wanted the unique name */
+    snprintf(tmp_bam, cap, "%s.bam", tpl);
+
+    BGZF *out = bgzf_open(tmp_bam, "w");
+    if (out == NULL) {
+        fprintf(stderr, "[countmut] error: cannot write temp BAM '%s'\n", tmp_bam);
+        bam_hdr_destroy(hdr); hts_close(in);
+        unlink(tmp_bam);
+        return -1;
+    }
+    bam_hdr_write(out, hdr);
+    bam1_t *b = bam_init1();
+    int nrec = 0;
+    while (sam_read1(in, hdr, b) >= 0) {
+        bam_write1(out, b);
+        ++nrec;
+    }
+    bgzf_close(out);
+    bam_destroy1(b);
+    bam_hdr_destroy(hdr);
+    hts_close(in);
+    /* let the subset's own reader-driven indexer build the BAI (the hand-built
+     * hts_idx_push path proved unreliable here) */
+    if (bam_index_build(tmp_bam, 0) != 0) {
+        fprintf(stderr, "[countmut] error: cannot index temp BAM '%s'\n", tmp_bam);
+        unlink(tmp_bam);
+        return -1;
+    }
+    fprintf(stderr, "[countmut] input is SAM: converted %d records -> %s\n", nrec, tmp_bam);
+    return 0;
+}
+
 int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *out_path, const char *region) {
     FILE *fp = (out_path && strcmp(out_path, "-") != 0) ? fopen(out_path, "w") : stdout;
     if (!fp) return 1;
+    int is_sam = 0;
+    if (detect_input_format(bam, &is_sam) == 2) {
+        fprintf(stderr,
+                "[countmut] error: CRAM input '%s' is not supported by this "
+                "self-contained core (it has no CRAM codec).  Convert it first:\n"
+                "    samtools view -b %s -o out.bam\n"
+                "(For CRAM with an embedded reference, samtools view also works "
+                "without a separate FASTA.)\n", bam, bam);
+        if (fp != stdout) fclose(fp);
+        return 3;
+    }
+    char sam_tmp[1100] = {0};
+    if (is_sam) {
+        if (transcode_sam_to_bam(bam, sam_tmp, sizeof(sam_tmp)) != 0) {
+            if (fp != stdout) fclose(fp);
+            return 3;
+        }
+        bam = sam_tmp;   /* the rest of the run operates on the temp BAM */
+    }
     BGZF *hfp = bgzf_open(bam, "r");
     if (!hfp) {
         fprintf(stderr, "[countmut] error: cannot open BAM file '%s'\n", bam);
@@ -1117,5 +1212,11 @@ input_ok:
     free(workers); free(regs);
     bam_hdr_destroy(hdr);
     if (fp != stdout) fclose(fp);
+    if (is_sam) {   /* clean up the transcoded temp BAM + its index */
+        char bai[1200];
+        snprintf(bai, sizeof(bai), "%s.bai", sam_tmp);
+        unlink(sam_tmp);
+        unlink(bai);
+    }
     return 0;
 }

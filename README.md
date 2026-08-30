@@ -82,6 +82,14 @@ options are few: input/reference/output, `--region`, `--threads/-t`,
 `--strandless`, `--count-indels`, `--vcf` (+ `--min-depth`,
 `--min-allele-support`), and `-e`/`-p`.
 
+## Input formats
+
+**BAM** (indexed, fast, threaded) and **SAM** (plain or gzipped — auto-transcoded
+to a temp BAM + index, same output as the equivalent BAM) are both supported,
+detected automatically. **CRAM** is not read by this self-contained core; convert
+first: `samtools view -b in.cram -o out.bam` — for a CRAM with an embedded
+reference, that conversion also works without a separate FASTA.
+
 ## License
 
 MIT

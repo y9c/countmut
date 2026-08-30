@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.01 s -> 0.64 s; output is byte-identical at any thread count.
 - **Reproducible benchmark fixture generator**: `tests/make_bench_bam.py`
   builds a bimodal (shallow body + deep hotspots) transcriptome-like BAM.
+- **SAM input** (plain or gzipped): auto-detected and transcoded to a temp
+  BAM + index, so SAM runs through the same indexed, threaded pipeline and
+  produces output byte-identical to the equivalent BAM.  `CRAM` is detected
+  and rejected with a clear `samtools view -b` conversion hint (the embedded
+  reference means no separate FASTA is needed for that conversion).
 
 ### Fixed
 - **Clean errors for missing/corrupt inputs** — a nonexistent BAM used to

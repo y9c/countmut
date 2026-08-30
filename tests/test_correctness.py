@@ -566,3 +566,39 @@ def _write_reference_read_bam(tmp_path, chrom, length):
         out.write(r)
     pysam.index(bam)
     return bam, fa
+
+
+def test_sam_input_matches_bam(motif_data, tmp_path):
+    """SAM (plain, and gzipped) input must produce byte-identical output to the
+    equivalent BAM (it is auto-transcoded to a temp BAM + index)."""
+    import gzip
+
+    bam, fa = motif_data
+    sam = str(tmp_path / "x.sam")
+    samgz = str(tmp_path / "x.sam.gz")
+    htxt = pysam.view(bam, "-h")
+    with open(sam, "w") as f:
+        f.write(htxt)
+    with gzip.open(samgz, "wt") as f:
+        f.write(htxt)
+    args = [
+        "--ref-base",
+        "C",
+        "--mut-base",
+        "T",
+        "--pad",
+        "1",
+        "--read-expr",
+        "bq >= 20 and dist5 >= 2",
+    ]
+    _h, from_bam = run_c(
+        bam, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
+    )
+    _h, from_sam = run_c(
+        sam, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
+    )
+    assert from_bam and from_bam == from_sam, "SAM input diverged from BAM"
+    _h, from_samgz = run_c(
+        samgz, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
+    )
+    assert from_bam == from_samgz, "gzipped SAM input diverged from BAM"
