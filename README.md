@@ -1,153 +1,93 @@
 # CountMut
 
-> **Unified ultra-fast strand-aware mutation counter** — C backend, Python wrapper.
-
-CountMut counts base/substitution ratios from BAM files with **fast C core** and
-a thin Python wrapper. It fuses the two classic ways of walking a BAM:
-
-- **pileup-based** (`bam_mplp_auto` / pysam pileup) — fast, sees indels/ref-skips, general.
-- **read-walk** (countmut's "no pileup") — walk reads directly, only touch the target sites.
-
-Both produce **identical** output, and the tool can process whole genomes in
-parallel (threads).
-
-## Why it's fast & correct
-
-- The hot loop (BAM read, pileup, per-(site,strand) base counting, mate-overlap
-  dedup, quality/conversion classification) is in **C** (`backend/countmut_core`,
-  built on the self-contained htslib subset from lh3/minipileup).
-- **Strand-aware** (countmut biological-strand rule for paired-end reads).
-- **Paired-end overlap dedup**: at an overlapping position a fragment is counted
-  once, choosing the best mate by `(mapq, read1, base-qual)` — the thing
-  minipileup gets wrong.
-- **Parallel**: divides the genome into bins and processes them across threads
-  (`--threads`).
-- **Memory-clean** (verified under AddressSanitizer).
-
-## Install
+Fast, strand-aware **base / mutation / allele counting** from BAM files.
+C core (htslib-subset + embedded Lua), thin Python CLI, both walk strategies
+(read-walk and pileup) produce byte-identical output.
 
 ```bash
 pip install -e .
-# or, to prebuild the C core:
-make backend
 ```
 
 ## Quick start
 
 ```bash
-# strand-aware A->G mutation count (bisulfite / m6A style)
-countmut -i in.bam -r ref.fa -o mut.tsv --ref-base A --mut-base G
+# C→T conversion rate at target sites          -> mutation table
+countmut -i in.bam -r ref.fa -o mut.tsv --ref-base C --mut-base T
 
-# per-site base counts (perbase/mpileup style)
+# every base, per strand                       -> base table
 countmut -i in.bam -r ref.fa -o depth.tsv
 
-# alleles -> VCF (minipileup style)
+# alleles as VCF                               -> VCF
 countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 ```
 
-## Modes
+There is **no `--mode` flag** — the output follows the inputs:
 
-There is **no `--mode` flag** — the output view is inferred from your inputs:
-
-| invocation | view |
+| you give | output columns |
 |---|---|
-| `countmut -i x -r ref -o out` | **base** (count all bases, per strand) |
-| `... --ref-base C --mut-base T` | **mutation** view + `mutation_rate` |
-| `... --vcf` | **allele** VCF |
+| nothing | `chrom pos strand ref depth a c g t n` |
+| `--ref-base C --mut-base T` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 mutation_rate` |
+| `--vcf` | VCF `GT:AD` |
 
-Internally this resolves to one of three output schemas:
+`mutation_rate` = converted / (converted + unconverted). Output is **per
+strand** by default (like the mutation view); `--strandless` merges the two.
 
-| view | columns |
-|------|---------|
-| `mutation` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 [o0 o1 o2] mutation_rate` — `mutation_rate` = m/(u+m), `nan` when no informative reads |
-| `base` | `chrom pos [strand] ref depth a c g t n [ins del ref_skip fail]` |
-| `allele` | `chrom pos ref depth ref_count alt alt_count`, or VCF with `--vcf` |
+## Filtering with `-e` / `-p`
 
-## Filtering with expressions (`-e` / `-p`)
-
-Filtering is done with **samtools-style filter expressions** — there are no
-separate `--min-mapq`/`--min-baseq`/`--trim-*` flags; write them as expressions
-instead.
-
-* `-e, --expression <STR>` — per-base **read** filter (samtools SAM fields).
-* `-p, --pile-expression <STR>` — per-**site** filter (pileup fields).
-
-Grammar is the samtools `filter=STRING` expression language (C-style precedence,
-`&&`/`||`/`!`, bit fields, tags, regex). See `docs/filter_grammar.md`.
+Read-level QC and trimming are **expressions**, not flags. `-e` filters reads
+per base, `-p` filters sites.
 
 ```bash
-# keep high-quality, non-5prime, properly paired reads
-countmut -i x.bam -r ref.fa -e "mapq >= 20 && bq >= 20 && dist5 >= 2 && flag & PROPER_PAIR"
+# quality + keep away from read ends
+countmut -i x -r ref -o out -e "mapq >= 20 and bq >= 20 and dist5 >= 2"
 
-# restrict to one RG group
-countmut -i x.bam -r ref.fa -e "tag('RG') == 'sampleA'"
+# one sample (RG tag)
+countmut -i x -r ref -o out -e "tag('RG') == 'sampleA'"
 
-# report only A-reference sites with depth >= 5 and > 2 G alleles
-countmut -i x.bam -r ref.fa -p "ref == 'A' && depth >= 5 && g > 2"
+# samtools-style: low mismatch, not a PCR dup, read1 only
+countmut -i x -r ref -o out -e "[NM] <= 3 and not (flag.dup ~= 0) and flag.read1 != 0"
+
+# site-level: only well-covered sites, ≥2 G reads
+countmut -i x -r ref -o out -p "depth >= 5 and g >= 2"
 ```
 
-Read variables: `mapq`, `flag` (+ `flag.dup`, `flag.unmap`, ...), `qname`, `pos`,
-`endpos`, `pnext`, `rname`, `mrname`, `tlen`, `qlen`, `rlen`, `ncigar`, `seq`,
-`qual`, `sclen`, `hclen`, `bq`, `dist5`/`dist3`, `strand`, `[NM]`/`[RG]` tags,
-`avg(qual)`, `exists([NM])`, `sqrt(mapq)`, ...  (per-base `qpos`, `bq`, `base`,
-`ref`; read-constant values are evaluated once per read.)
+**You'll use ~10 variables 90% of the time:** `mapq`, `bq` (base quality),
+`flags`, `qpos` (position in read), `dist5`/`dist3` (distance to read ends),
+`base`/`ref`, `tag('XX')`, `rname`.
 
-Site variables: `depth`, `pos`, `ref`, `a c g t n`, `ins`, `del`, `ref_skip`, `fail`.
+**Gotchas (read these once):**
+- **Missing tags** — if a read has no `NM`, then `tag('NM')` is nothing, and
+  `tag('NM') <= 3` *errors* (that read is dropped). Guard with `exists('NM')`.
+- **Per-base fields** — only `qpos, bq, base, ref, dist5, dist3` change per
+  base. Everything else (`mapq`, `flags`, tags, `rname`, …) is evaluated once
+  per read and costs essentially nothing.
+- A **syntax error exits with code 2** — a typo is never silently ignored.
 
-> `-e`/`-p` run **inside the fast C backend** via an embedded Lua 5.4 state —
-> there is no Python fallback and no per-base slowdown: read-constant filters
-> like `mapq >= 20` or `[NM] <= 3` are evaluated once per read.
+Full grammar: [`docs/filter_grammar.md`](docs/filter_grammar.md)
+· Exhaustive reference: [`docs/expression_reference.md`](docs/expression_reference.md)
 
-## Engine selection
+## Engine
 
-`--engine {auto|read-walk|pileup}` (default `auto`):
-
-- `auto` → read-walk for `mutation` (targeted sites), pileup for `base`/`allele`.
-- `read-walk` / `pileup` → force a strategy.
+`--engine {auto|read-walk|pileup}` (default `auto`) — `auto` uses read-walk for
+the targeted mutation view and pileup otherwise. Either way the output is
+identical.
 
 ## Options
 
 ```
--i/--input, -r/--reference, -o/--output
---engine {auto,read-walk,pileup}
---region, --threads/-t
---ref-base, --mut-base, --pad, --save-rest
---strandless, --count-indels, --min-depth, --min-allele-support, --vcf
--e/--expression, -p/--pile-expression
+-i/--input  -r/--reference  -o/--output
+--region  --threads/-t  --engine
+--ref-base  --mut-base  --pad  --save-rest
+--strandless  --count-indels  --vcf   # + --min-depth, --min-allele-support
+-e/--expression  -p/--pile-expression
 ```
 
-## Design
+## Why it's fast
 
-```
-countmut/
-  cli.py               rich CLI (routes to the C core directly)
-  backend.py           builds/loads the C binary and calls it
-  model.py             FilterConfig / MutationConfig / StrandConfig / EngineConfig
-  core.py              the original pure-Python countmut (legacy reference)
-backend/
-  countmut_core.c      computation core: read-walk AND pileup engines,
-                       mate-overlap dedup, -e/-p Lua filters (embedded lua5.4)
-  countmut_expr.c      Lua filter-expression evaluator (-e / -p)
-  countmut_core_main.c CLI wrapper
-  Makefile             builds the `countmut_core` binary (links lua5.4)
-```
-
-Both BAM-walk strategies (`--engine read-walk` and `--engine pileup`) are
-implemented in C; Python is a thin wrapper and does no counting.  `-e`/`-p`
-filters are embedded-Lua expressions (see `docs/filter_grammar.md`), evaluated
-in C identically by both engines.
-
-Both walks fill the same per-site, per-strand base counts and emit byte-identical
-output -- the two strategies are interchangeable, with identical results (and
-identical `-e`/`-p` filtering) whether you pick `read-walk` or `pileup`.
-
-## References this tool learns from
-
-- [minipileup](https://github.com/lh3/minipileup) — pileup walk, filters, allele counting
-- [perbase](https://github.com/sstadick/perbase) / [pbr](https://github.com/brentp/pbr) — mate-aware overlap dedup, base counts
-- [countmut](https://github.com/y9c/countmut) — biological strand, bisulfite NS/Zf/Yf tiers
-- [mpileup](https://github.com/y9c/mpileup) / [cpup](https://github.com/y9c/cpup) — base-count output
-- samtools `--input-fmt-option filter=STRING` — the expression grammar
+- read-constant filters (`mapq >= 20`, `[NM] <= 3`) run **once per read** in
+  both engines — ≈ free, even on whole genomes
+- per-base filters (~55–140 ns/base) materialize **only** the fields you use
+- both engines are C; `--threads` splits the genome across workers
 
 ## License
 
