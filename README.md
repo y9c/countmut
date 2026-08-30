@@ -1,9 +1,22 @@
 # CountMut
 
-CountMut is a C-speed, strand-aware counter for BAM files: point it at a BAM
-and a reference and it tells you, at every site, what the reads actually
-show. Give it a conversion pair and it turns that into a mutation or
-conversion rate.
+CountMut answers a simple question from modification and damage assays: at a
+given site, how many reads show the reference base versus the converted one,
+and what is that as a rate? Earlier tools made it harder than it needed to be —
+they buried QC under dozens of filter flags, forced a choice between two
+BAM-walking strategies that disagreed on paired-end overlaps, and re-priced a
+cheap read-level filter at every base of every read, which quietly dominates
+deep ribosomal hotspots.
+
+The design fixes all three at once. QC and trimming are one expression
+language evaluated in the C core, so there are no filter flags to grow. Both
+walking strategies share a single count structure and are byte-identical, so
+the engine is purely a speed choice. And the parser decides at compile time
+which variables an expression touches: read-constant filters run once per read
+(a whole-genome `mapq >= 20` costs about half a second), while the six
+per-base values stay accurate but cheap. The mutation view ends with a
+`mutation_rate`, and read QC stays honest because BAMs already store reverse
+reads reference-forward.
 
 ```bash
 pip install -e .
@@ -74,26 +87,6 @@ options are few: input/reference/output, `--region`, `--threads/-t`,
 `--engine`, `--ref-base`, `--mut-base`, `--pad`, `--save-rest`,
 `--strandless`, `--count-indels`, `--vcf` (+ `--min-depth`,
 `--min-allele-support`), and `-e`/`-p`.
-
-## Why it's designed this way
-
-CountMut answers a simple question from modification and damage assays: at a
-given site, how many reads show the reference base versus the converted one,
-and what is that as a rate? Earlier tools made it harder than it needed to be —
-they buried QC under dozens of filter flags, forced a choice between two
-BAM-walking strategies that disagreed on paired-end overlaps, and re-priced a
-cheap read-level filter at every base of every read, which quietly dominates
-deep ribosomal hotspots.
-
-The design fixes all three at once. QC and trimming are one expression
-language evaluated in the C core, so there are no filter flags to grow. Both
-walking strategies share a single count structure and are byte-identical, so
-the engine is purely a speed choice. And the parser decides at compile time
-which variables an expression touches: read-constant filters run once per read
-(a whole-genome `mapq >= 20` costs about half a second), while the six
-per-base values stay accurate but cheap. The mutation view ends with a
-`mutation_rate`, and read QC stays honest because BAMs already store reverse
-reads reference-forward.
 
 ## License
 
