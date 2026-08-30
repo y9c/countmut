@@ -59,5 +59,6 @@ mimicking bwa output.
 
 ```
 count_mutations(...)             # legacy: writes legacy.tsv
-run_pipeline(...)                # new: writes new.tsv (mode=mutation, engine=read-walk)
+countmut_core --bam test.bam --fa ref.fa --mode mutation \
+  --engine read-walk --ref-base C --mut-base T --pad 15 ...   # new (C core)
 ```

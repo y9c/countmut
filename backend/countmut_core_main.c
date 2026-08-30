@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <getopt.h>
 #include "countmut_core.h"
+#include "countmut_expr.h"
 
 /* samtools-style symbolic SAM flag name -> bit */
 static int flag_bit(const char *name) {
@@ -80,6 +81,8 @@ static void usage(void) {
         "  --min-depth N --mean-depth N\n"
         "  --count-indels --split-strand\n"
         "  --strand S            both | forward | reverse\n"
+        "  --read-expr EXPR       -e Lua read filter (evaluated per base)\n"
+        "  --pile-expr EXPR       -p Lua site filter (evaluated per site)\n"
         "  --max-depth N --threads N --flanking N\n");
 }
 
@@ -168,6 +171,8 @@ int main(int argc, char **argv) {
         {"ff", required_argument, 0, 1101},
         {"input-fmt-option", required_argument, 0, 1102},
         {"mate-fix", no_argument, 0, 1016},
+        {"read-expr", required_argument, 0, 2002},
+        {"pile-expr", required_argument, 0, 2003},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
     };
@@ -175,6 +180,8 @@ int main(int argc, char **argv) {
     while ((c = getopt_long(argc, argv, "b:f:o:r:m:e:p:q:Q:s:t:h", long_opts, NULL)) != -1) {
         switch (c) {
         case 2000: bam = optarg; break;
+        case 2002: cfg.read_expr = optarg; break;
+        case 2003: cfg.pile_expr = optarg; break;
         case 'f': fa = optarg; break;
         case 'o': out = optarg; break;
         case 'r': region = optarg; break;
@@ -214,13 +221,12 @@ int main(int argc, char **argv) {
         }
     }
     if (!bam || !fa) { usage(); return 1; }
-    /* Engine resolution: auto -> pileup (single pass, general) */
-    if (cfg.engine == CM_ENGINE_AUTO) cfg.engine = CM_ENGINE_PILEUP;
-    if (cfg.engine == CM_ENGINE_PILEUP) {
-        return cm_run(&cfg, bam, fa, out, region);
-    }
-    /* read-walk engine: fall back to pileup for now (correct output) */
-    /* TODO: dedicated read-walk engine */
-    fprintf(stderr, "[countmut_core] read-walk engine not yet available; using pileup\n");
+    /* Validate -e / -p Lua expressions up-front (syntax error -> exit 2). */
+    if (!cm_expr_valid(cfg.read_expr, cfg.pile_expr)) return 2;
+    /* Engine resolution: auto -> read-walk for mutation (sparse target set),
+     * pileup otherwise -- matches the Python engines' auto choice.
+     * Both engines are fully implemented in C and emit identical rows. */
+    if (cfg.engine == CM_ENGINE_AUTO)
+        cfg.engine = (cfg.mode == CM_MODE_MUTATION) ? CM_ENGINE_READWALK : CM_ENGINE_PILEUP;
     return cm_run(&cfg, bam, fa, out, region);
 }

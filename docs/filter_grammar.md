@@ -1,94 +1,64 @@
-# CountMut filter-grammar proposal (`-e` / `-p`)
+# CountMut filter expressions (`-e` / `-p`)
 
-> **Status: proposal for review.** Two string filters only. The grammar is a
-> **strict samtools-style predicate** over a flat namespace of scalar values
-> (no object/method fields, no `exec`/`import`/assignment), with samtools-style
-> variable names. Implemented as a *safe Python-expression subset*.
+`-e` / `-p` are evaluated **inside the C core** by an embedded Lua 5.4 state
+(the approach used by pbr).  There is no Python expression engine.
 
----
+| Flag | Scope     | Evaluated when                |
+|------|-----------|-------------------------------|
+| `-e, --expression` | read-level | once per aligned base (after trim, before overlap dedup) |
+| `-p, --pile-expression` | site-level | once per reported site (before output) |
 
-## 1. The two filters
+An expression that evaluates to `false`/`nil` excludes that base (read) or
+omits that site (pile).  Runtime errors reject the item; a **syntax error is
+fatal** (exit code 2) so a typo is never silently ignored.
 
-| Flag | Scope | Evaluated when |
-|------|-------|----------------|
-| `-e, --expression <STR>` | read-level | once per aligned base |
-| `-p, --pile-expression <STR>` | site-level | once per reported site |
+Both **styles** are accepted:
 
-The expression must evaluate to a boolean. A `false` read is excluded; a `false`
-site is omitted. With neither flag, the fast C path runs with no extra filtering.
+```
+countmut -i x.bam -r ref.fa -e "MAPQ >= 20 and bq >= 20"
+countmut -i x.bam -r ref.fa -e "return read.mapq >= 20"
+```
 
----
+Bare predicates (the original countmut style) are auto-wrapped in
+`return (...)`; pbr-style chunks with an explicit `return` work as-is.
+For convenience the Python/samtools operator spellings are translated to Lua:
+`!=` → `~=`, `&&` → `and`, `||` → `or`, unary `!` → `not`.
 
-## 2. Values & operators
+## Read namespace (`-e`, per aligned base)
 
-* **number** (int/float), **string** (`'A'` or `"sample"`), **boolean** (`true`/`false`).
-* comparison: `==` `!=` `<` `<=` `>` `>=` (also `in` / `not in`)
-* logical: `&&` `||` `!` (samtools style); `and` `or` `not` are accepted as aliases
-* arithmetic: `+` `-` `*` `/` `//` `%`
-* bitwise (samtools flag tests): `&` `|` `^`
-* regex: `=~` / `!~`
-* grouping: `( ... )`
+Flat globals (and the `read` table): `mapq`/`MAPQ`, `bq`/`baseq`/`BQ`
+(base quality at the current position, `-1` if none), `flags`/`flag`/`FLAGS`,
+`strand`/`STRAND` (`+1`/`-1`, biological, paired-aware), `qname`, `rname`,
+`pos`/`POS` (1-based start), `endpos`, `qlen`/`length`/`LEN`, `rlen`, `ncigar`,
+`qpos`/`QPOS` (0-based position in the read), `dist5`/`DIST5` and
+`dist3`/`DIST3` (bases to the fragment 5′/3′ ends).  `tag('XX')` reads an aux
+tag (`exists('XX')` tests presence), `'Z'`/`'i'`/`'f'` types supported.
 
-There are **no** separate `--min-mapq` / `--min-baseq` / `--trim-*` flags —
-express them with `-e` / `-p` instead (e.g. `-e "bq >= 20 and dist5 >= 2"`).
+SAM flag constants are pre-defined: `PAIRED PROPER_PAIR UNMAP MUNMAP REVERSE
+MREVERSE READ1 READ2 SECONDARY QCFAIL DUP SUPPLEMENTARY` -- e.g.
+`flags & (SECONDARY|DUP) == 0`.
 
----
+## Pile namespace (`-p`, per site)
 
-## 3. Namespace — read variables (`-e`)
+`depth` (total base depth, both strands), `pos` (0-based), `ref`/`ref_base`,
+`a c g t n` (= `A C G T N`), `ins`, `del`, `ref_skip`, `fail`; and in mutation
+mode the reference window as `motif`.
 
-Flat, scalar, samtools-style names (lower-case and UPPER-case aliases accepted).
+## Examples
 
-| Name | Type | Description |
-|------|------|-------------|
-| `mapq` / `MAPQ` | int | read mapping quality |
-| `baseq` / `BQ` / `MIN_BQ` | int | base quality (Phred) at the current position (`-1` if none) |
-| `flags` / `FLAGS` | int | raw SAM flag bitmask |
-| `strand` / `STRAND` | int | `+1` forward, `-1` reverse (biological/paired-aware) |
-| `qname` / `QNAME` | str | query name |
-| `length` / `LEN` | int | read length |
-| `dist5` / `DIST5` / `distance_from_5prime` | int | bases from fragment 5′ end |
-| `dist3` / `DIST3` / `distance_from_3prime` | int | bases from fragment 3′ end |
-| `tag('XX')` | value | BAM aux tag (string/int); missing → `None` |
+```
+# unique, high-quality, not near the 5' end
+countmut -i x.bam -r ref.fa -e "mapq >= 20 and bq >= 20 and dist5 >= 2"
 
-Flag masks may be written symbolically: `flags & UNMAP == 0`, `flags & (SECONDARY|DUP) == 0`,
-`flags & PAIRED != 0`, or numerically (`flags & 4 == 0`).
+# keep forward-strand, properly-paired reads
+countmut -i x.bam -r ref.fa -e "strand == 1 and flags & 2 != 0"
 
----
+# restrict to an RG group
+countmut -i x.bam -r ref.fa -e "tag('RG') == 'sampleA'"
 
-## 4. Namespace — site variables (`-p`)
+# report only A-reference sites with depth >= 5 and > 2 G alleles
+countmut -i x.bam -r ref.fa -p "ref == 'A' and depth >= 5 and g > 2"
+```
 
-| Name | Type | Description |
-|------|------|-------------|
-| `depth` / `DEPTH` | int | observed base depth |
-| `pos` / `POS` | int | 0-based genomic position |
-| `ref` / `REF` / `ref_base` | str | reference allele |
-| `a c g t n` / `A C G T N` | int | per-residue base counts |
-| `ins` / `INS`, `del` / `DEL`, `ref_skip`, `fail` | int | indels / ref-skips / filter-failures |
-
----
-
-## 5. Examples (samtools style)
-
-    # unique, high-quality, not at the 5' end
-    countmut -i x.bam -r ref.fa -e "MAPQ >= 20 and BQ >= 20 and dist5 >= 2"
-
-    # keep only properly-paired reads
-    countmut -i x.bam -r ref.fa -e "flags & 2 != 0 and flags & UNMAP == 0"
-
-    # restrict to an RG group
-    countmut -i x.bam -r ref.fa -e "tag('RG') == 'sampleA'"
-
-    # report only A-reference sites with depth >= 5 and > 2 G alleles
-    countmut -i x.bam -r ref.fa -p "ref == 'A' and depth >= 5 and g > 2"
-
----
-
-## 6. Safety & notes
-
-* Evaluated via `ast` under a restricted node allow-list; errors/`NameError` →
-  `false` (rejected), never raised; values are read-only.
-* Symbolic flag constants available: `PAIRED PROPER_PAIR UNMAP MUNMAP REVERSE
-  MREVERSE READ1 READ2 SECONDARY QCFAIL DUP SUPPLEMENTARY`.
-* When `-e` or `-p` is set, processing uses the Python engine (expressions are
-  not evaluated in the C core, which stays the zero-overhead path otherwise).
-
+Both engines (read-walk and pileup) apply the filters identically and are
+byte-identical with `-e` / `-p` set.

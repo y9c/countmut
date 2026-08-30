@@ -26,7 +26,7 @@ from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 try:
     __version__ = importlib_metadata.version("countmut")
 except importlib_metadata.PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.1"
+    __version__ = "0.1.2"
 
 click.rich_click.TEXT_MARKUP = "rich"
 click.rich_click.SHOW_ARGUMENTS = True
@@ -57,7 +57,6 @@ click.rich_click.OPTION_GROUPS = {
                 "--vcf",
             ],
         },
-        {"name": "Filtering", "options": ["--expression", "--pile-expression"]},
         {"name": "Misc", "options": ["--verbose", "--version", "--help"]},
     ]
 }
@@ -158,14 +157,14 @@ console = Console()
     "--expression",
     "read_expr",
     default=None,
-    help='Samtools-style read filter expression (e.g. "mapq>=20 and flag&UNMAP==0")',
+    help='Lua read filter (e.g. "mapq >= 20 and flags & UNMAP == 0")',
 )
 @click.option(
     "-p",
     "--pile-expression",
     "pile_expr",
     default=None,
-    help="Samtools-style site filter expression (e.g. \"depth>=5 and ref=='A'\")",
+    help="Lua site filter (e.g. \"ref == 'A' and depth >= 5 and g > 2\")",
 )
 @click.option("--verbose", is_flag=True, default=False, help="Verbose logging")
 def main(
@@ -193,8 +192,8 @@ def main(
     # Panels/logs go to stderr so stdout stays pure data.
     console = Console(stderr=True)
 
-    # Filtering is done via -e / -p expressions; the core keeps conservative
-    # defaults for read acceptance and mutation categorisation.
+    # The C core keeps conservative defaults for read acceptance and mutation
+    # categorisation.
     fcfg = FilterConfig(
         min_mapq=0,
         min_baseq=20,
@@ -259,18 +258,6 @@ def main(
         if d:
             os.makedirs(d, exist_ok=True)
 
-    # Validate filter expressions up-front for a clear error instead of empty output.
-    from .expression import compile_pile_pred, compile_read_pred
-
-    try:
-        if read_expr:
-            compile_read_pred(read_expr)
-        if pile_expr:
-            compile_pile_pred(pile_expr)
-    except ValueError as exc:
-        console.print(f"[red]Invalid filter expression: {exc}[/red]")
-        sys.exit(2)
-
     stats = run_backend(
         samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
     )
@@ -282,9 +269,7 @@ def main(
     summary = Table(box=rich.box.MINIMAL, show_header=False)
     summary.add_column("Metric", style="bold")
     summary.add_column("Value", style="cyan")
-    summary.add_row(
-        "Backend:", "C core" if stats["backend"] == "c" else "Python fallback"
-    )
+    summary.add_row("Backend:", "C core")
     summary.add_row("Sites / depth rows:", f"{stats['total_sites']:,}")
     summary.add_row("Wall-clock:", f"{stats['elapsed']:.3f}s")
     console.print(

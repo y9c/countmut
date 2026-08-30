@@ -65,6 +65,9 @@ typedef struct {
     /* BED region restriction (pbr -b / -x) */
     const char *bedfile;     /* include-regions BED (or position list) */
     const char *exclude;     /* exclude-regions BED */
+    /* Lua filter expressions (-e read-level, -p site-level) */
+    const char *read_expr;
+    const char *pile_expr;
 } cm_config;
 
 /* Count `region` (NULL = whole file) of `bam` against `fa`, writing the output

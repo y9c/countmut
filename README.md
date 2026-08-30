@@ -108,22 +108,26 @@ Site variables: `depth`, `pos`, `ref`, `a c g t n`, `ins`, `del`, `ref_skip`, `f
 
 ```
 countmut/
-  cli.py               rich CLI (routes to the backend)
-  backend.py           builds/loads the C binary; calls it; Python fallback
-  pipeline.py          region binning + parallel dispatch
+  cli.py               rich CLI (routes to the C core directly)
+  backend.py           builds/loads the C binary and calls it
   model.py             FilterConfig / MutationConfig / StrandConfig / EngineConfig
-  engine_readwalk.py   read-walk engine
-  engine_pileup.py     pileup engine
-  formatter.py         TSV/VCF renderers
-  expression.py        samtools-style filter-expression engine
+  core.py              the original pure-Python countmut (legacy reference)
 backend/
-  countmut_core.c      the computation core (htslib subset)
+  countmut_core.c      computation core: read-walk AND pileup engines,
+                       mate-overlap dedup, -e/-p Lua filters (embedded lua5.4)
+  countmut_expr.c      Lua filter-expression evaluator (-e / -p)
   countmut_core_main.c CLI wrapper
-  Makefile             builds the `countmut_core` binary
+  Makefile             builds the `countmut_core` binary (links lua5.4)
 ```
 
-Both engines fill the same `SiteColumn` (per-site, per-strand base counts), so
-the two "ways" are interchangeable; the C backend implements the pileup engine.
+Both BAM-walk strategies (`--engine read-walk` and `--engine pileup`) are
+implemented in C; Python is a thin wrapper and does no counting.  `-e`/`-p`
+filters are embedded-Lua expressions (see `docs/filter_grammar.md`), evaluated
+in C identically by both engines.
+
+Both walks fill the same per-site, per-strand base counts and emit byte-identical
+output -- the two strategies are interchangeable, with identical results (and
+identical `-e`/`-p` filtering) whether you pick `read-walk` or `pileup`.
 
 ## References this tool learns from
 

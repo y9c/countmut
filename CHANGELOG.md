@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-30
+
+### Changed
+- **Architecture: C is the only counting implementation.**  The Python
+  read-walk and pileup engines (`engine_readwalk.py`, `engine_pileup.py`) and
+  their orchestration (`pipeline.py`) were removed.  `--engine read-walk` and
+  `--engine pileup` are both fully implemented in `backend/countmut_core`
+  (the read-walk engine is new), and Python is now a thin wrapper that only
+  builds the command line (`backend.py`) and drives the CLI.
+- **`-e` / `-p` expressions moved into C via embedded Lua 5.4** (pbr-style),
+  replacing the Python expression engine.  The original countmut bare-predicate
+  style (`mapq >= 20`) still works (auto-wrapped in `return (...)`) and the
+  `!=`/`&&`/`||`/`!` spellings are translated to Lua (`~=`/`and`/`or`/`not`).
+  A syntax error is fatal (exit 2).  See `docs/filter_grammar.md`.
+- Python fallbacks removed: if the C binary is missing, `run_backend` raises
+  instead of silently using a Python engine.
+- `-p` `depth` is the total base depth (both strands), matching perbase/pbr.
+
+### Fixed
+- `min_allele_support` was only honoured in the VCF allele output; it now also
+  filters the plain allele table.
+- Validation vs external references: `samtools mpileup | cpup` 0/1480
+  base-count mismatches on forward-only data; legacy `count_mutations`
+  agrees on all shared sites (modulo the documented x1/x2 column inversion).
+
 ## [0.1.1] - 2026-08-30
 
 ### Fixed

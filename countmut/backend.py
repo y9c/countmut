@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Bridge between the Python wrapper and the C countmut backend.
+Python wrapper around the C countmut core.
 
-The C binary (``backend/countmut_core``) does ALL the computation.  This module
-only: builds the config, makes sure indices exist, shells out to the binary, and
-collects the output for a rich summary.  If the binary is not built, it falls
-back to the pure-Python pipeline (``countmut.pipeline``) so the tool always runs.
+All computation happens in ``backend/countmut_core`` (both the read-walk and
+the pileup engine are implemented in C).  This module only: builds the command
+line from the config dataclasses, makes sure indices exist, shells out to the
+binary and collects a small summary.  There is deliberately no Python counting
+engine: results come from C alone.
 
 Author: Ye Chang
 Date: 2026-08-30
@@ -35,10 +36,10 @@ def find_binary() -> Path | None:
     return None
 
 
-def build_binary() -> bool:
-    """Compile the backend with `make`; return True on success."""
+def build_binary() -> Path | None:
+    """Compile the backend with `make`; return the binary path or None."""
     if not (BACKEND_DIR / "Makefile").exists():
-        return False
+        return None
     try:
         subprocess.run(
             ["make"],
@@ -49,8 +50,8 @@ def build_binary() -> bool:
         )
     except subprocess.CalledProcessError as exc:
         sys.stderr.write(f"[countmut] backend build failed: {exc.stderr.decode()}\n")
-        return False
-    return BINARY.exists()
+        return None
+    return BINARY if BINARY.exists() else None
 
 
 def ensure_backend() -> Path | None:
@@ -107,12 +108,14 @@ def _build_cmd(
         cmd += ["--min-con", str(fcfg.min_con)]
     if ecfg.count_indels:
         cmd.append("--count-indels")
-    if ecfg.split_strand or ecfg.mode != "mutation":
+    if ecfg.split_strand:
         cmd.append("--split-strand")
-    cmd += [
-        "--strand",
-        {"both": "both", "forward": "forward", "reverse": "reverse"}[scfg.process],
-    ]
+    if scfg.process in ("forward", "reverse"):
+        cmd += ["--strand", scfg.process]
+    if ecfg.read_expr:
+        cmd += ["--read-expr", ecfg.read_expr]
+    if ecfg.pile_expr:
+        cmd += ["--pile-expr", ecfg.pile_expr]
     if ecfg.region:
         cmd += ["--region", ecfg.region]
     if ecfg.mode == "mutation" and mcfg is not None:
@@ -132,8 +135,8 @@ def _build_cmd(
         cmd += ["--min-allele-support", str(ecfg.min_allele_support)]
         if ecfg.vcf:
             cmd.append("--vcf")
-        if ecfg.min_depth:
-            cmd += ["--min-depth", str(ecfg.min_depth)]
+    if ecfg.min_depth:
+        cmd += ["--min-depth", str(ecfg.min_depth)]
     return cmd
 
 
@@ -150,33 +153,14 @@ def run_backend(
     scfg: StrandConfig | None = None,
     ecfg: EngineConfig | None = None,
 ) -> dict:
-    """Run the C backend; returns a summary dict.
+    """Run the C core; returns a summary dict.
 
-    Returns ``{"backend": "c", ...}`` on success, or ``{"backend": "python"}``
-    if it had to fall back (with the unified pipeline result attached).
+    The C binary must exist (it is auto-built by :func:`ensure_backend`); there
+    is no pure-Python counting fallback.
     """
     fcfg = fcfg or FilterConfig()
     scfg = scfg or StrandConfig()
     ecfg = ecfg or EngineConfig()
-
-    # ---- string expression filters need the Python engine (C can't eval) ----
-    if ecfg.read_expr or ecfg.pile_expr:
-        from .pipeline import run_pipeline
-
-        start = time.time()
-        res = run_pipeline(
-            samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
-        )
-        return {
-            "backend": "python",
-            "success": res.success,
-            "total_sites": res.total_sites,
-            "total_depth": res.total_depth,
-            "elapsed": time.time() - start,
-            "error": res.error,
-            "output": output,
-            "note": "expression filter",
-        }
 
     # ensure indices exist
     if not os.path.exists(samfile + ".bai"):
@@ -190,22 +174,10 @@ def run_backend(
 
     binary = ensure_backend()
     if binary is None:
-        # graceful fall back to pure Python
-        from .pipeline import run_pipeline
-
-        start = time.time()
-        res = run_pipeline(
-            samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
+        raise RuntimeError(
+            "countmut core binary not found and could not be built "
+            f"(looked in {BACKEND_DIR}). Run `make` there."
         )
-        return {
-            "backend": "python",
-            "success": res.success,
-            "total_sites": res.total_sites,
-            "total_depth": res.total_depth,
-            "elapsed": time.time() - start,
-            "error": res.error,
-            "output": output,
-        }
 
     cmd = _build_cmd(
         binary,
@@ -222,11 +194,10 @@ def run_backend(
     elapsed = time.time() - start
 
     if output is None and proc.returncode == 0:
-        # stream the TSV from stdout (already printed by the driver)
+        # stream the TSV from stdout (already printed by the binary)
         sys.stdout.write(proc.stdout)
         sys.stdout.flush()
 
-    # count output rows for the summary (read from output or captured stdout)
     rows = 0
     if output:
         with open(output) as fh:
