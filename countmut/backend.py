@@ -100,7 +100,7 @@ def _build_cmd(
         "--threads",
         str(ecfg.threads or min(os.cpu_count() or 1, 8)),
         "--max-depth",
-        str(fcfg.max_depth or 8000),
+        str(fcfg.max_depth),   # 0 = unlimited
     ]
     if fcfg.max_unc is not None:
         cmd += ["--max-unc", str(fcfg.max_unc)]
@@ -137,12 +137,24 @@ def _build_cmd(
             cmd.append("--vcf")
     if ecfg.min_depth:
         cmd += ["--min-depth", str(ecfg.min_depth)]
+    if ecfg.verbose:
+        cmd.append("--verbose")
     return cmd
 
 
 # ---------------------------------------------------------------------------
 # public entry point
 # ---------------------------------------------------------------------------
+def _forward_stderr(stream) -> None:
+    """Forward a child process' stderr lines to our stderr (--verbose)."""
+    try:
+        for line in stream:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+    except (ValueError, OSError):
+        pass
+
+
 def run_backend(
     samfile: str,
     reference: str,
@@ -190,12 +202,27 @@ def run_backend(
         ecfg=ecfg,
     )
     start = time.time()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    stdout = ""
+    if ecfg.verbose:
+        # stream the C core's stderr (progress) to our stderr in real time
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        import threading
+
+        fwd = threading.Thread(
+            target=_forward_stderr, args=(proc.stderr,), daemon=True
+        )
+        fwd.start()
+        out, _ = proc.communicate()
+        fwd.join(timeout=2)
+        stdout = out or ""
+    else:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        stdout = proc.stdout
     elapsed = time.time() - start
 
     if output is None and proc.returncode == 0:
-        # stream the TSV from stdout (already printed by the binary)
-        sys.stdout.write(proc.stdout)
+        # stream the TSV from stdout
+        sys.stdout.write(stdout)
         sys.stdout.flush()
 
     rows = 0
@@ -203,7 +230,7 @@ def run_backend(
         with open(output) as fh:
             rows = sum(1 for _ in fh) - 1
     else:
-        rows = len(proc.stdout.splitlines()) - 1
+        rows = len(stdout.splitlines()) - 1
 
     if proc.returncode != 0:
         sys.stderr.write(f"[countmut] backend error: {proc.stderr}\n")

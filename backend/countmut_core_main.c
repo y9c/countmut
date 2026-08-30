@@ -83,7 +83,9 @@ static void usage(void) {
         "  --strand S            both | forward | reverse\n"
         "  --read-expr EXPR       -e Lua read filter (evaluated per base)\n"
         "  --pile-expr EXPR       -p Lua site filter (evaluated per site)\n"
-        "  --max-depth N --threads N --flanking N\n");
+        "  --verbose               real-time per-region progress on stderr\n"
+        "  --max-depth N          pileup per-position depth cap (0 = unlimited)\n"
+        "  --threads N --flanking N\n");
 }
 
 static int mode_from(const char *s) {
@@ -125,7 +127,7 @@ int main(int argc, char **argv) {
     cfg.count_indels = 0;
     cfg.split_strand = 1;
     cfg.strand_process = CM_STRAND_BOTH;
-    cfg.max_depth = 8000;
+    cfg.max_depth = 0;       /* 0 = unlimited (count all reads) */
     cfg.threads = 1;
     cfg.flanking = 0;
     cfg.req_flags = 0;
@@ -173,6 +175,7 @@ int main(int argc, char **argv) {
         {"mate-fix", no_argument, 0, 1016},
         {"read-expr", required_argument, 0, 2002},
         {"pile-expr", required_argument, 0, 2003},
+        {"verbose", no_argument, 0, 'V'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
     };
@@ -182,6 +185,7 @@ int main(int argc, char **argv) {
         case 2000: bam = optarg; break;
         case 2002: cfg.read_expr = optarg; break;
         case 2003: cfg.pile_expr = optarg; break;
+        case 'V': cfg.verbose = 1; break;
         case 'f': fa = optarg; break;
         case 'o': out = optarg; break;
         case 'r': region = optarg; break;

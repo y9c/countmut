@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <assert.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "sam.h"
 #include "faidx.h"
@@ -216,7 +217,7 @@ typedef struct {
     const char *bam;
     region_t *regions;
     int nregions;
-    volatile int next;
+    volatile int done;
     FILE **files;
     worker_t *workers;
     int nthreads;
@@ -383,6 +384,8 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
     const bam_pileup1_t **plp = (const bam_pileup1_t **)calloc(1, sizeof(void *));
     void *data_ptrs[1] = {&aux};
     bam_mplp_t mplp = bam_mplp_init(1, read_bam, data_ptrs);
+    /* htslib's default maxcnt is 8000; 0 = unlimited so we raise it. */
+    bam_mplp_set_maxcnt(mplp, cfg->max_depth > 0 ? cfg->max_depth : 0x7fffffff);
 
     int pos;
     site_t site;
@@ -393,7 +396,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
         /* BED region restriction (pbr -b include / -x exclude) */
         if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], pos, pos + 1)) continue;
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], pos, pos + 1)) continue;
-        const int n = n_plp[0];
+        int n = n_plp[0];
         if (n == 0) continue;
         const char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
 
@@ -805,19 +808,38 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
 
 typedef struct { work_t *s; int wi; } targ_t;
 
+/* current resident memory (MB) of this process, for --verbose progress */
+static long cur_rss_mb(void) {
+    long pages = 0, size = 0;
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f) { if (fscanf(f, "%ld %ld", &size, &pages) != 2) pages = 0; fclose(f); }
+    return pages * ((long)sysconf(_SC_PAGESIZE) / 1024) / 1024;
+}
+
 static void *thread_main(void *arg) {
     targ_t *ta = (targ_t *)arg;
     worker_t *w = &ta->s->workers[ta->wi];
     work_t *s = ta->s;
-    for (;;) {
-        int i = __sync_fetch_and_add(&s->next, 1);
-        if (i >= s->nregions) break;
+    /* each worker owns a contiguous slice of regions and one temp file, so the
+     * number of open temp files == nthreads (not nregions, which could exhaust
+     * the fd limit on genomes with many contigs) */
+    int base = (s->nregions + s->nthreads - 1) / s->nthreads;
+    int lo = ta->wi * base;
+    int hi = lo + base; if (hi > s->nregions) hi = s->nregions;
+    const int step = s->nregions > 100 ? s->nregions / 100 : 1;
+    for (int i = lo; i < hi; ++i) {
         if (s->cfg->engine == CM_ENGINE_READWALK)
-            count_interval_readwalk(w, s->cfg, s->hdr, s->files[i],
+            count_interval_readwalk(w, s->cfg, s->hdr, s->files[ta->wi],
                                     s->regions[i].tid, s->regions[i].beg, s->regions[i].end);
         else
-            count_interval(w, s->cfg, s->hdr, s->files[i],
+            count_interval(w, s->cfg, s->hdr, s->files[ta->wi],
                            s->regions[i].tid, s->regions[i].beg, s->regions[i].end);
+        if (s->cfg->verbose) {
+            int done = __sync_add_and_fetch(&s->done, 1);
+            if (done % step == 0 || done == s->nregions)
+                fprintf(stderr, "[countmut] %d/%d regions (%.1f%%) done  rss=%ldMB\n",
+                        done, s->nregions, 100.0 * done / s->nregions, cur_rss_mb());
+        }
     }
     return NULL;
 }
@@ -871,8 +893,10 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
 
     write_header(fp, cfg);
 
-    FILE **files = (FILE **)calloc(nregions, sizeof(FILE *));
-    for (int i = 0; i < nregions; ++i) files[i] = tmpfile();
+    /* bounded temp files: one per worker (contiguous region slices), not one
+     * per region -- an all-contigs run can have tens of thousands of regions */
+    FILE **files = (FILE **)calloc(nthreads, sizeof(FILE *));
+    for (int i = 0; i < nthreads; ++i) files[i] = tmpfile();
     worker_t *workers = (worker_t *)calloc(nthreads, sizeof(worker_t));
     for (int i = 0; i < nthreads; ++i)
         worker_init(&workers[i], bam, fa, cfg->pad, cfg->bedfile, cfg->exclude,
@@ -880,7 +904,7 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
 
     work_t s;
     s.cfg = cfg; s.hdr = hdr; s.bam = bam;
-    s.regions = regs; s.nregions = nregions; s.next = 0;
+    s.regions = regs; s.nregions = nregions; s.done = 0;
     s.files = files; s.workers = workers; s.nthreads = nthreads;
 
     pthread_t *tds = (pthread_t *)calloc(nthreads, sizeof(pthread_t));
@@ -892,7 +916,8 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     for (int i = 0; i < nthreads; ++i) pthread_join(tds[i], NULL);
     free(targs);
 
-    for (int i = 0; i < nregions; ++i) {
+    /* concatenate worker slices in worker order -> global region order */
+    for (int i = 0; i < nthreads; ++i) {
         fflush(files[i]); rewind(files[i]);
         char buf[16384]; size_t r;
         while ((r = fread(buf, 1, sizeof(buf), files[i])) > 0) fwrite(buf, 1, r, fp);

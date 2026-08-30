@@ -85,5 +85,6 @@ class EngineConfig:
     vcf: bool = False  # allele mode: emit VCF
     count_indels: bool = False
     split_strand: bool = True
+    verbose: bool = False  # real-time per-region progress on stderr
     report_reference_bases: bool = False  # -k flanking window (pbr)
     flanking: int = 0

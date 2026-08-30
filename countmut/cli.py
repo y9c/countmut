@@ -26,7 +26,7 @@ from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 try:
     __version__ = importlib_metadata.version("countmut")
 except importlib_metadata.PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.3"
+    __version__ = "0.1.4"
 
 click.rich_click.TEXT_MARKUP = "rich"
 click.rich_click.SHOW_ARGUMENTS = True
@@ -145,6 +145,13 @@ console = Console()
     help="Minimum site depth to report (base/allele mode)",
 )
 @click.option(
+    "--max-depth",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Per-position depth cap (pileup engine; 0 = unlimited, counts all reads)",
+)
+@click.option(
     "--min-allele-support",
     type=int,
     default=1,
@@ -166,7 +173,12 @@ console = Console()
     default=None,
     help="Lua site filter (e.g. \"ref == 'A' and depth >= 5 and g > 2\")",
 )
-@click.option("--verbose", is_flag=True, default=False, help="Verbose logging")
+@click.option(
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Real-time per-region progress on stderr (large BAMs)",
+)
 def main(
     samfile,
     reference,
@@ -182,6 +194,7 @@ def main(
     split_strand,
     count_indels,
     min_depth,
+    max_depth,
     min_allele_support,
     vcf,
     read_expr,
@@ -202,6 +215,7 @@ def main(
         min_con=1,
         trim_start=2,
         trim_end=2,
+        max_depth=max_depth,
     )
     mcfg = (
         MutationConfig(
@@ -223,6 +237,7 @@ def main(
         vcf=vcf,
         read_expr=read_expr,
         pile_expr=pile_expr,
+        verbose=verbose,
     )
 
     config_table = Table(box=rich.box.MINIMAL, show_header=False)

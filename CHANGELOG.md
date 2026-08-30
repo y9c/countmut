@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-08-30
+
+### Fixed / changed
+- **`--max-depth` is now unlimited (0) by default** — the pileup engine counts
+  *all* reads.  Previously the wrapper silently used 8000 and, worse, htslib's
+  own 8000 pileup ceiling truncated very deep sites regardless.  Now wired
+  through `bam_mplp_set_maxcnt` (0 = unlimited), `--max-depth N` caps the
+  per-position depth for users who want it, and the CLI exposes `--max-depth`.
+- **Many-contig runs**: output no longer uses one temp file *per region* (which
+  exhausted the file-descriptor limit on transcriptomes with 40k+ contigs);
+  each worker now writes its own contiguous region slice to one temp file and
+  slices are concatenated in order.
+- **`--verbose` progress**: throttled to ~100 updates, shows completion % and
+  the process's current RSS (MB) in real time; the CLI now streams the C
+  progress to stderr live (instead of swallowing it).
+- New `scripts/countmut_monitor.py` — a runtime memory monitor that samples the
+  process-tree RSS of any countmut run and reports peak + a timeline.
+
+### Verified
+- On a 40k-transcript RNA-Seq PE BAM with ~63k-read (100k-fragment) rRNA
+  hotspots: default depth is now the true fragment count (51,084 at a hotspot),
+  `--max-depth 100` caps at 100; full-genome mutation runs (2.1M rows) complete
+  and are byte-identical across runs.
+
 ## [0.1.3] - 2026-08-30
 
 ### Performance (results unchanged -- byte-identical output, no logic change)
