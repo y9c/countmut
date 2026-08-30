@@ -1,8 +1,9 @@
 # CountMut
 
-Fast, strand-aware **base / mutation / allele counting** from BAM files.
-C core (htslib-subset + embedded Lua), thin Python CLI, both walk strategies
-(read-walk and pileup) produce byte-identical output.
+CountMut is a C-speed, strand-aware counter for BAM files: point it at a BAM
+and a reference and it tells you, at every site, what the reads actually
+show. Give it a conversion pair and it turns that into a mutation or
+conversion rate.
 
 ```bash
 pip install -e .
@@ -21,76 +22,74 @@ countmut -i in.bam -r ref.fa -o depth.tsv
 countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 ```
 
-There is **no `--mode` flag** — the output follows the inputs:
+There is no `--mode` flag: the output follows what you asked for. Bare runs
+give the per-strand base composition; adding a reference/mutation pair gives
+the conversion view with a `mutation_rate` column; `--vcf` gives an allele
+VCF. Output is per strand by default, and `--strandless` merges the two.
 
-| you give | output columns |
-|---|---|
-| nothing | `chrom pos strand ref depth a c g t n` |
-| `--ref-base C --mut-base T` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 mutation_rate` |
-| `--vcf` | VCF `GT:AD` |
+## Filtering with one expression instead of ten flags
 
-`mutation_rate` = converted / (converted + unconverted). Output is **per
-strand** by default (like the mutation view); `--strandless` merges the two.
-
-## Filtering with `-e` / `-p`
-
-Read-level QC and trimming are **expressions**, not flags. `-e` filters reads
-per base, `-p` filters sites.
+Read-level QC and trimming are expressions (`-e`), site-level rules are
+expressions too (`-p`), in the samtools `filter=` grammar, evaluated inside the
+C core. The old `--min-mapq` / `--min-baseq` / `--trim-*` flags are gone.
 
 ```bash
-# quality + keep away from read ends
+# quality, and not on the error-prone read ends
 countmut -i x -r ref -o out -e "mapq >= 20 and bq >= 20 and dist5 >= 2"
 
-# one sample (RG tag)
+# one sample
 countmut -i x -r ref -o out -e "tag('RG') == 'sampleA'"
 
-# samtools-style: low mismatch, not a PCR dup, read1 only
+# samtools-style: low mismatch, not a PCR duplicate, read 1 only
 countmut -i x -r ref -o out -e "[NM] <= 3 and not (flag.dup ~= 0) and flag.read1 != 0"
 
-# site-level: only well-covered sites, ≥2 G reads
+# site-level: only well-covered sites with ≥2 G reads
 countmut -i x -r ref -o out -p "depth >= 5 and g >= 2"
 ```
 
-**You'll use ~10 variables 90% of the time:** `mapq`, `bq` (base quality),
-`flags`, `qpos` (position in read), `dist5`/`dist3` (distance to read ends),
-`base`/`ref`, `tag('XX')`, `rname`.
+Most filters use roughly ten variables — `mapq`, `bq` (base quality), `flags`,
+`qpos` (position in the read), `dist5`/`dist3` (distance to the read ends),
+`base`/`ref`, `tag('XX')`, and `rname`. A couple of things are worth knowing.
+A missing tag is nothing: comparing `tag('NM')` *errors* and drops that read,
+so guard with `exists('NM')` when tags are optional. Only the six per-base
+values (`qpos`, `bq`, `base`, `ref`, `dist5`, `dist3`) cost anything to
+evaluate; everything else runs once per read and is essentially free. A syntax
+error stops the run (exit code 2), so a typo can never silently change your
+numbers.
 
-**Gotchas (read these once):**
-- **Missing tags** — if a read has no `NM`, then `tag('NM')` is nothing, and
-  `tag('NM') <= 3` *errors* (that read is dropped). Guard with `exists('NM')`.
-- **Per-base fields** — only `qpos, bq, base, ref, dist5, dist3` change per
-  base. Everything else (`mapq`, `flags`, tags, `rname`, …) is evaluated once
-  per read and costs essentially nothing.
-- A **syntax error exits with code 2** — a typo is never silently ignored.
+The full grammar is in
+[`docs/filter_grammar.md`](docs/filter_grammar.md), with an exhaustive
+reference in [`docs/expression_reference.md`](docs/expression_reference.md).
 
-Full grammar: [`docs/filter_grammar.md`](docs/filter_grammar.md)
-· Exhaustive reference: [`docs/expression_reference.md`](docs/expression_reference.md)
+## Engines and options
 
-## Engine
+Two BAM-walking strategies live in the C core. `--engine auto` (default) uses
+the read walk for the targeted mutation view and the pileup walk otherwise;
+both produce identical output, so the choice only affects speed. The remaining
+options are few: input/reference/output, `--region`, `--threads/-t`,
+`--engine`, `--ref-base`, `--mut-base`, `--pad`, `--save-rest`,
+`--strandless`, `--count-indels`, `--vcf` (+ `--min-depth`,
+`--min-allele-support`), and `-e`/`-p`.
 
-`--engine {auto|read-walk|pileup}` (default `auto`) — `auto` uses read-walk for
-the targeted mutation view and pileup otherwise. Either way the output is
-identical.
+## Why it's designed this way
 
-## Options
+CountMut answers a simple question from modification and damage assays: at a
+given site, how many reads show the reference base versus the converted one,
+and what is that as a rate? Earlier tools made it harder than it needed to be —
+they buried QC under dozens of filter flags, forced a choice between two
+BAM-walking strategies that disagreed on paired-end overlaps, and re-priced a
+cheap read-level filter at every base of every read, which quietly dominates
+deep ribosomal hotspots.
 
-```
--i/--input  -r/--reference  -o/--output
---region  --threads/-t  --engine
---ref-base  --mut-base  --pad  --save-rest
---strandless  --count-indels  --vcf   # + --min-depth, --min-allele-support
--e/--expression  -p/--pile-expression
-```
-
-## Why it's fast
-
-- read-constant filters (`mapq >= 20`, `[NM] <= 3`) run **once per read** in
-  both engines — ≈ free, even on whole genomes
-- per-base filters (~55–140 ns/base) materialize **only** the fields you use
-- both engines are C; `--threads` splits the genome across workers
-
-The rationale behind the design — pain points, improvements, and the smart
-solutions — is in [`docs/design.md`](docs/design.md).
+The design fixes all three at once. QC and trimming are one expression
+language evaluated in the C core, so there are no filter flags to grow. Both
+walking strategies share a single count structure and are byte-identical, so
+the engine is purely a speed choice. And the parser decides at compile time
+which variables an expression touches: read-constant filters run once per read
+(a whole-genome `mapq >= 20` costs about half a second), while the six
+per-base values stay accurate but cheap. The mutation view ends with a
+`mutation_rate`, and read QC stays honest because BAMs already store reverse
+reads reference-forward.
 
 ## License
 
