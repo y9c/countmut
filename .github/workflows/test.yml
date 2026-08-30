@@ -5,8 +5,10 @@ on:
     branches: [main, dev]
     paths:
       - 'countmut/**'
+      - 'backend/**'
       - 'tests/**'
       - 'pyproject.toml'
+      - '.github/workflows/test.yml'
 
   pull_request:
     branches: [main]
@@ -25,6 +27,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies (Lua 5.4 for the C -e/-p filters)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liblua5.4-dev
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
