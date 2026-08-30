@@ -25,16 +25,17 @@ countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 There is no `--mode` flag: the output follows what you asked for. Bare runs
 give the per-strand base composition; adding a reference/mutation pair gives
 the conversion view with a `mutation_rate` column; `--vcf` gives an allele
-VCF. Output is per strand by default, and `--strandless` merges the two. (In
-RNA there is no genomic mutation — the "converted" base is a modification read
-out through reverse transcription, so the rate reports modification level
-rather than a variant.)
+VCF. Output is per strand by default, and `--strandless` merges the two.
 
 ## Filtering with one expression instead of ten flags
 
-Read-level QC and trimming are expressions (`-e`), site-level rules are
-expressions too (`-p`), in the samtools `filter=` grammar, evaluated inside the
-C core. The old `--min-mapq` / `--min-baseq` / `--trim-*` flags are gone.
+In RNA there is no genomic mutation to count: the "converted" base is a
+modification read out through reverse transcription, so the conversion rate
+reports modification level rather than a variant. Whatever your sample, the
+QC and trimming live in one expression language — read-level rules are `-e`
+expressions, site-level rules `-p`, in the samtools `filter=` grammar,
+evaluated inside the C core. The old `--min-mapq` / `--min-baseq` /
+`--trim-*` flags are gone.
 
 ```bash
 # quality, and not on the error-prone read ends
