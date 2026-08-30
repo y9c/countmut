@@ -3,6 +3,28 @@
 `-e` / `-p` are evaluated **inside the C core** by an embedded Lua 5.4 state
 (the approach used by pbr).  There is no Python expression engine.
 
+**CountMut has no dedicated filter/trim CLI flags.**  All read-level QC and
+trimming is a `-e` expression, all site-level QC is a `-p` expression:
+
+| old flag / concept            | expression                                     |
+|-------------------------------|------------------------------------------------|
+| `min_mapq`                    | `-e "mapq >= N"`                               |
+| `min_baseq` (quality QC)      | `-e "bq >= N"`                                 |
+| `max_sub` (NS tag)            | `-e "tag('NS') <= N"`                          |
+| `max_unc` / `min_con` (Yf/Zf) | `-e "tag('Zf') <= N and tag('Yf') >= N"`       |
+| mismatches (NM tag)           | `-e "tag('NM') <= N"`                          |
+| include/exclude SAM flags     | `-e "flags & N == N"`, `-e "flags & N == 0"`   |
+| fragment 5'/3' trim           | `-e "dist5 >= N and dist3 >= N"`               |
+| read R1 3'-end trim           | `-e "not (flags & 64 ~= 0 and qpos >= length - N)"` |
+| read R2 5'-start trim         | `-e "not (flags & 128 ~= 0 and qpos < N)"`     |
+| `min_depth`                   | `-p "depth >= N"`                              |
+| `min_allele_support`          | `-p "g >= N"` (or a/c/t), `-p "depth >= N and g > 0"` |
+| basic strand selection        | `-e "strand == 1"` (fwd) / `-e "strand == -1"` (rev) |
+
+Only genuinely structural options stay as flags: input/reference/output, `--mode`,
+`--engine`, `--region`, `--threads`, `--ref-base`/`--mut-base`/`--pad`/`--save-rest`,
+`--split-strand`, `--count-indels`, `--max-depth`, `--vcf`, `--verbose`.
+
 | Flag | Scope     | Evaluated when                |
 |------|-----------|-------------------------------|
 | `-e, --expression` | read-level | once per aligned base (after trim, before overlap dedup) |

@@ -19,18 +19,16 @@ from dataclasses import dataclass
 
 @dataclass
 class FilterConfig:
-    """Read- and base-level filters (mirrors countmut/perbase/minipileup)."""
+    """Only the computational depth cap is a real setting here.
 
-    min_mapq: int = 0
-    min_baseq: int = 20
-    max_sub: int = 1  # max substitutions (NS tag); read-level
-    max_unc: int | None = 3  # max unconverted (Zf tag); read-level, None=ignore
-    min_con: int | None = 1  # min converted (Yf tag); read-level, None=ignore
-    trim_start: int = 2  # bases trimmed from fragment 5' end
-    trim_end: int = 2  # bases trimmed from fragment 3' end
-    include_flags: int = 0  # SAM flags that must be set
-    exclude_flags: int = 1796  # UNMAP|SECONDARY|QCFAIL|DUP (samtools default)
-    max_depth: int = 0  # per-position depth cap (0 = unlimited)
+    All read-level filtering and trimming belongs in the ``-e`` read expression
+    (``mapq``, ``bq``, ``tag('NS')/tag('Zf')/tag('Yf')/tag('NM')``,
+    ``dist5``/``dist3``/``qpos``/``flags``) and all site-level filtering in the
+    ``-p`` pile expression (``depth``, ``ref``, ``a/c/g/t/n``, ``pos``, ...) --
+    not as dedicated flags.
+    """
+
+    max_depth: int = 0  # per-position depth cap (pileup engine; 0 = unlimited)
 
 
 @dataclass
@@ -75,16 +73,8 @@ class EngineConfig:
     # Lua filter expressions (evaluated inside the C core, pbr-style)
     read_expr: str | None = None  # -e read-level filter (per aligned base)
     pile_expr: str | None = None  # -p site-level filter (per site)
-    # allele / vcf options
-    min_allele_support: int = 1
-    min_allele_fraction: float = 0.0
-    min_strand_support: int = 0
-    min_allele_depth: int = 0
-    min_mean_depth: int = 0
-    min_depth: int = 0  # min site depth to report (base/allele)
+    # allele / output
     vcf: bool = False  # allele mode: emit VCF
     count_indels: bool = False
     split_strand: bool = True
     verbose: bool = False  # real-time per-region progress on stderr
-    report_reference_bases: bool = False  # -k flanking window (pbr)
-    flanking: int = 0

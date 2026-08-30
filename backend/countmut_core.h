@@ -45,8 +45,10 @@ typedef struct {
     int     max_sub;         /* NS cap, -1 = ignore */
     int     max_unc;         /* Zf cap, -1 = ignore */
     int     min_con;         /* Yf floor, -1 = ignore */
-    int     trim_start;
-    int     trim_end;
+    int     trim_fragment_start;  /* fragment 5' end trim */
+    int     trim_fragment_end;    /* fragment 3' end trim */
+    int     trim_r1_end;          /* read1 (R1) 3'-query-end trim */
+    int     trim_r2_start;        /* read2 (R2) 5'-query-start trim */
     int     min_allele_support;
     double  min_allele_frac;
     int     min_strand_support;

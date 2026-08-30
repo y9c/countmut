@@ -61,6 +61,19 @@ static int bio_strand(const bam1_t *b) {
     return rev ? 1 : 0;
 }
 
+/* Read (R1/R2) query-end trimming, in addition to the fragment 5'/3' trim.
+ *   R1: `r1_end` bases off its 3' query end  (qpos >= len - r1_end)
+ *   R2: `r2_start` bases off its 5' query start (qpos < r2_start)
+ * Returns 1 when the base at `qpos` should be skipped. */
+static int read_trim_skip(const bam1_t *b, int qpos, int r1_end, int r2_start) {
+    if (!(b->core.flag & BAM_FPAIRED)) return 0;
+    if (r1_end > 0 && (b->core.flag & BAM_FREAD1))
+        return qpos >= (int)b->core.l_qseq - r1_end;
+    if (r2_start > 0 && (b->core.flag & BAM_FREAD2))
+        return qpos < r2_start;
+    return 0;
+}
+
 /* per-site accumulator */
 typedef struct {
     int cnt[2][3][5]; /* [strand][category][base] */
@@ -424,8 +437,9 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             if (p->is_del) { site.del[s]++; continue; }
             if (p->qpos < 0 || p->qpos >= b->core.l_qseq) continue;
             int qpos = p->qpos, qlen = b->core.l_qseq;
-            if (s == 0) { if (qpos < cfg->trim_start || qlen - qpos <= cfg->trim_end) continue; }
-            else { if (qpos < cfg->trim_end || qlen - qpos <= cfg->trim_start) continue; }
+            if (s == 0) { if (qpos < cfg->trim_fragment_start || qlen - qpos <= cfg->trim_fragment_end) continue; }
+            else { if (qpos < cfg->trim_fragment_end || qlen - qpos <= cfg->trim_fragment_start) continue; }
+            if (read_trim_skip(b, qpos, cfg->trim_r1_end, cfg->trim_r2_start)) continue;
             /* -e read filter (per aligned base; same spot as the Python engine) */
             if (w->expr && cm_expr_has_read(w->expr)
                 && !cm_expr_read(w->expr, b, hdr->target_name[tid], qpos, s ? -1 : 1))
@@ -606,10 +620,11 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
         if (ref_pos >= w->chr_len || w->chr_seq[ref_pos] != cfg->ref_base) return wins;
     }
     if (s == 0) {
-        if ((int)qpos < cfg->trim_start || (int)qlen - (int)qpos <= cfg->trim_end) return wins;
+        if ((int)qpos < cfg->trim_fragment_start || (int)qlen - (int)qpos <= cfg->trim_fragment_end) return wins;
     } else {
-        if ((int)qpos < cfg->trim_end || (int)qlen - (int)qpos <= cfg->trim_start) return wins;
+        if ((int)qpos < cfg->trim_fragment_end || (int)qlen - (int)qpos <= cfg->trim_fragment_start) return wins;
     }
+    if (read_trim_skip(b, (int)qpos, cfg->trim_r1_end, cfg->trim_r2_start)) return wins;
     if (w->expr && cm_expr_has_read(w->expr)
         && !cm_expr_read(w->expr, b, hdr->target_name[tid], (int)qpos, s ? -1 : 1))
         return wins;

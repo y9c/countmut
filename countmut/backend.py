@@ -87,25 +87,11 @@ def _build_cmd(
         ecfg.mode,
         "--engine",
         {"read-walk": "read-walk", "pileup": "pileup", "auto": "auto"}[ecfg.engine],
-        "--min-mapq",
-        str(fcfg.min_mapq),
-        "--min-baseq",
-        str(fcfg.min_baseq),
-        "--max-sub",
-        str(fcfg.max_sub),
-        "--trim-start",
-        str(fcfg.trim_start),
-        "--trim-end",
-        str(fcfg.trim_end),
         "--threads",
         str(ecfg.threads or min(os.cpu_count() or 1, 8)),
         "--max-depth",
         str(fcfg.max_depth),  # 0 = unlimited
     ]
-    if fcfg.max_unc is not None:
-        cmd += ["--max-unc", str(fcfg.max_unc)]
-    if fcfg.min_con is not None:
-        cmd += ["--min-con", str(fcfg.min_con)]
     if ecfg.count_indels:
         cmd.append("--count-indels")
     if ecfg.split_strand:
@@ -131,12 +117,9 @@ def _build_cmd(
             cmd.append("--save-rest")
         if mcfg.ref_base2:
             cmd += ["--ref-base2", mcfg.ref_base2, "--mut-base2", mcfg.mut_base2 or "T"]
-    if ecfg.mode == "allele":
-        cmd += ["--min-allele-support", str(ecfg.min_allele_support)]
-        if ecfg.vcf:
-            cmd.append("--vcf")
-    if ecfg.min_depth:
-        cmd += ["--min-depth", str(ecfg.min_depth)]
+    if ecfg.mode == "allele" and ecfg.vcf:
+        cmd.append("--vcf")
+    # --min-depth / --min-allele-support are expressed via -p (depth >= N, g >= N)
     if ecfg.verbose:
         cmd.append("--verbose")
     return cmd

@@ -26,7 +26,7 @@ from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 try:
     __version__ = importlib_metadata.version("countmut")
 except importlib_metadata.PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.5"
+    __version__ = "0.1.6"
 
 click.rich_click.TEXT_MARKUP = "rich"
 click.rich_click.SHOW_ARGUMENTS = True
@@ -52,10 +52,13 @@ click.rich_click.OPTION_GROUPS = {
             "options": [
                 "--split-strand",
                 "--count-indels",
-                "--min-depth",
-                "--min-allele-support",
+                "--max-depth",
                 "--vcf",
             ],
+        },
+        {
+            "name": "Filters & Trimming (expressions)",
+            "options": ["--expression", "--pile-expression"],
         },
         {"name": "Misc", "options": ["--verbose", "--version", "--help"]},
     ]
@@ -138,25 +141,11 @@ console = Console()
     help="Append ins/del/ref_skip/fail columns (base mode)",
 )
 @click.option(
-    "--min-depth",
-    type=int,
-    default=0,
-    show_default=True,
-    help="Minimum site depth to report (base/allele mode)",
-)
-@click.option(
     "--max-depth",
     type=int,
     default=0,
     show_default=True,
     help="Per-position depth cap (pileup engine; 0 = unlimited, counts all reads)",
-)
-@click.option(
-    "--min-allele-support",
-    type=int,
-    default=1,
-    show_default=True,
-    help="Minimum alt allele support (allele mode)",
 )
 @click.option("--vcf", is_flag=True, help="Emit VCF in allele mode")
 @click.option(
@@ -193,9 +182,7 @@ def main(
     save_rest,
     split_strand,
     count_indels,
-    min_depth,
     max_depth,
-    min_allele_support,
     vcf,
     read_expr,
     pile_expr,
@@ -208,13 +195,6 @@ def main(
     # The C core keeps conservative defaults for read acceptance and mutation
     # categorisation.
     fcfg = FilterConfig(
-        min_mapq=0,
-        min_baseq=20,
-        max_sub=1,
-        max_unc=3,
-        min_con=1,
-        trim_start=2,
-        trim_end=2,
         max_depth=max_depth,
     )
     mcfg = (
@@ -232,8 +212,6 @@ def main(
         region=region,
         count_indels=count_indels,
         split_strand=split_strand,
-        min_depth=min_depth,
-        min_allele_support=min_allele_support,
         vcf=vcf,
         read_expr=read_expr,
         pile_expr=pile_expr,

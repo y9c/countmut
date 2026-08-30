@@ -368,7 +368,7 @@ def test_readwalk_proper_paired_overlap_dedup(tmp_path):
         mode="base",
         engine="read-walk",
         region="chr1:1-20",
-        extra=["--trim-start", "0", "--trim-end", "0"],
+        extra=["--trim-fragment-start", "0", "--trim-fragment-end", "0"],
     )
     # overlap is 1-based 7..10 (0-based 6..9); each must have exactly depth 1
     for pos in (7, 8, 9, 10):

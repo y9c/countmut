@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-08-30
+
+### Changed
+- **All filtering and trimming are expressions (`-e`/`-p`), not flags.**
+  The countmut CLI removed its filter flags (`--min-depth`, `--min-allele-support`)
+  and never exposes read filters/trims; every read-level QC lives in `-e`
+  (`mapq`, `bq`, `tag('NS'/'Zf'/'Yf'/'NM')`, `flags & ...`, `dist5`/`dist3`/
+  `qpos` for trimming) and every site-level QC in `-p` (`depth`, `ref`,
+  `a/c/g/t/n`, ...).  See `docs/filter_grammar.md` for the complete mapping.
+- Mutation quality-QC moved to `-e "bq >= N"`: all bases that pass `-e` land in
+  tier `x2` (the internal quality boundary is 0; `x0`/`x1` stay 0 unless you
+  opt into tiered reports).  The C core keeps the low-level flags for internal
+  use/tests but defaults to "no filtering" (`max_sub/unc/con = -1`, no trim).
+- `FilterConfig`/`EngineConfig` slimmed to structural settings only.
+
 ## [0.1.5] - 2026-08-30
 
 ### Performance
