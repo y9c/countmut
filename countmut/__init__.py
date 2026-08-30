@@ -1,19 +1,26 @@
 """
-CountMut: Ultra-fast strand-aware mutation counter.
+CountMut: Unified ultra-fast strand-aware mutation counter.
 
-This package provides a command-line tool and a library for counting mutations
-from BAM pileup data, with a focus on bisulfite sequencing analysis.
+This package drives a C core (``backend/countmut_core``) through a thin Python
+wrapper.  It supports strand-aware mutation counting (bisulfite NS/Zf/Yf tiers),
+per-site base counting, and allele/VCF output, with mate-overlap deduplication.
+
+Author: Ye Chang
 """
 
-from .core import count_mutations
-from .utils import format_duration, get_output_headers, write_output
+from .backend import run_backend
+from .pipeline import PipelineResult, run_pipeline
+from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
 
 __author__ = "Ye Chang"
 __email__ = "yech1990@gmail.com"
 
 __all__ = [
-    "count_mutations",
-    "format_duration",
-    "get_output_headers",
-    "write_output",
+    "run_backend",
+    "run_pipeline",
+    "PipelineResult",
+    "EngineConfig",
+    "FilterConfig",
+    "MutationConfig",
+    "StrandConfig",
 ]

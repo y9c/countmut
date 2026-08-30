@@ -1,140 +1,138 @@
 # CountMut
 
-[![Pypi Releases](https://img.shields.io/pypi/v/countmut.svg)](https://pypi.python.org/pypi/countmut)
-[![Downloads](https://img.shields.io/pepy/dt/countmut)](https://pepy.tech/project/countmut)
-[![Development Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/y9c/countmut)
+> **Unified ultra-fast strand-aware mutation counter** — C backend, Python wrapper.
 
-> **Ultra-fast strand-aware mutation counter for bisulfite sequencing analysis**
+CountMut counts base/substitution ratios from BAM files with **fast C core** and
+a thin Python wrapper. It fuses the two classic ways of walking a BAM:
 
-CountMut is a high-performance tool for counting mutations from bisulfite sequencing BAM files (BS-seq, CAM-seq, GLORI-seq, eTAM-seq). It features parallel processing, quality-based mate overlap deduplication, and optimized file I/O for maximum speed.
+- **pileup-based** (`bam_mplp_auto` / pysam pileup) — fast, sees indels/ref-skips, general.
+- **read-walk** (countmut's "no pileup") — walk reads directly, only touch the target sites.
 
-## Features
+Both produce **identical** output, and the tool can process whole genomes in
+parallel (threads).
 
-- 🚀 **Ultra-Fast**: Call mutation without pileup reads
-- 🧬 **Bisulfite Support**: NS, Zf, Yf tag filtering for conversion analysis
-- 🎯 **Accurate**: Quality-based mate overlap deduplication prevents double-counting
-- ⚡ **Parallel**: Multi-threaded genomic window processing
-- 🔧 **Flexible**: Configurable filtering, strand-specific processing, auto-indexing
+## Why it's fast & correct
 
-## Installation
+- The hot loop (BAM read, pileup, per-(site,strand) base counting, mate-overlap
+  dedup, quality/conversion classification) is in **C** (`backend/countmut_core`,
+  built on the self-contained htslib subset from lh3/minipileup).
+- **Strand-aware** (countmut biological-strand rule for paired-end reads).
+- **Paired-end overlap dedup**: at an overlapping position a fragment is counted
+  once, choosing the best mate by `(mapq, read1, base-qual)` — the thing
+  minipileup gets wrong.
+- **Parallel**: divides the genome into bins and processes them across threads
+  (`--threads`).
+- **Memory-clean** (verified under AddressSanitizer).
+
+## Install
 
 ```bash
-pip install countmut
+pip install -e .
+# or, to prebuild the C core:
+make backend
 ```
 
-## Quick Start
+## Quick start
 
 ```bash
-# Basic usage - auto-creates indices if needed
-countmut -i input.bam -r reference.fa -o mutations.tsv
+# strand-aware A->G mutation count (bisulfite / m6A style)
+countmut -i in.bam -r ref.fa -o mut.tsv --ref-base A --mut-base G
 
-# Count T→C mutations (common in bisulfite sequencing)
-countmut -i input.bam -r reference.fa -o mutations.tsv --ref-base T --mut-base C
+# per-site base counts (perbase/mpileup style)
+countmut -i in.bam -r ref.fa --mode base -o depth.tsv
 
-# With custom threads and filtering
-countmut -i input.bam -r reference.fa -o mutations.tsv -t 8 --max-unc 5 --min-con 2
+# alleles -> VCF (minipileup style)
+countmut -i in.bam -r ref.fa --mode allele --vcf -o allele.vcf
 ```
+
+## Modes
+
+| Mode | Output |
+|------|--------|
+| `mutation` | `chrom pos strand motif u0 u1 u2 m0 m1 m2 [o0 o1 o2]` (strand-aware substitution table) |
+| `base` | `chrom pos [strand] ref depth a c g t n [ins del ref_skip fail]` |
+| `allele` | `chrom pos ref depth ref_count alt alt_count`, or VCF with `--vcf` |
+
+## Filtering with expressions (`-e` / `-p`)
+
+Filtering is done with **samtools-style filter expressions** — there are no
+separate `--min-mapq`/`--min-baseq`/`--trim-*` flags; write them as expressions
+instead.
+
+* `-e, --expression <STR>` — per-base **read** filter (samtools SAM fields).
+* `-p, --pile-expression <STR>` — per-**site** filter (pileup fields).
+
+Grammar is the samtools `filter=STRING` expression language (C-style precedence,
+`&&`/`||`/`!`, bit fields, tags, regex). See `docs/filter_grammar.md`.
+
+```bash
+# keep high-quality, non-5prime, properly paired reads
+countmut -i x.bam -r ref.fa -e "mapq >= 20 && bq >= 20 && dist5 >= 2 && flag & PROPER_PAIR"
+
+# restrict to one RG group
+countmut -i x.bam -r ref.fa -e "tag('RG') == 'sampleA'"
+
+# report only A-reference sites with depth >= 5 and > 2 G alleles
+countmut -i x.bam -r ref.fa -p "ref == 'A' && depth >= 5 && g > 2"
+```
+
+Read variables: `mapq`, `flag` (+ `flag.dup`, `flag.unmap`, ...), `qname`, `pos`,
+`endpos`, `pnext`, `rname`, `mrname`, `tlen`, `qlen`, `rlen`, `ncigar`, `seq`,
+`qual`, `sclen`, `hclen`, `bq`, `dist5`/`dist3`, `strand`, `[NM]`/`[RG]` tags,
+`avg(qual)`, `exists([NM])`, `sqrt(mapq)`, ...
+
+Site variables: `depth`, `pos`, `ref`, `a c g t n`, `ins`, `del`, `ref_skip`, `fail`.
+
+> When `-e`/`-p` is given, counting runs on the Python engine (the C core cannot
+> evaluate strings). Without expressions, the fast C backend is used.
+
+## Engine selection
+
+`--engine {auto|read-walk|pileup}` (default `auto`):
+
+- `auto` → read-walk for `mutation` (targeted sites), pileup for `base`/`allele`.
+- `read-walk` / `pileup` → force a strategy.
 
 ## Options
 
-**Input/Output**
-```bash
--i, --input PATH       Input BAM file (coordinate-sorted) [required]
--r, --reference PATH   Reference FASTA file [required]
--o, --output PATH      Output TSV file (default: stdout)
--f, --force            Overwrite output without prompting
+```
+-i/--input, -r/--reference, -o/--output
+--mode {mutation,base,allele}   --engine {auto,read-walk,pileup}
+--region, --threads/-t
+--ref-base, --mut-base, --pad, --save-rest
+--split-strand, --count-indels, --min-depth, --min-allele-support, --vcf
+-e/--expression, -p/--pile-expression
 ```
 
-**Mutation Analysis**
-```bash
---ref-base TEXT        Reference base to count from [default: A]
---mut-base TEXT        Mutation base to count [default: G]
---strand TEXT          Strand: both/forward/reverse [default: both]
---region TEXT          Genomic region (e.g., 'chr1:1000000-2000000')
+## Design
+
+```
+countmut/
+  cli.py               rich CLI (routes to the backend)
+  backend.py           builds/loads the C binary; calls it; Python fallback
+  pipeline.py          region binning + parallel dispatch
+  model.py             FilterConfig / MutationConfig / StrandConfig / EngineConfig
+  engine_readwalk.py   read-walk engine
+  engine_pileup.py     pileup engine
+  formatter.py         TSV/VCF renderers
+  expression.py        samtools-style filter-expression engine
+backend/
+  countmut_core.c      the computation core (htslib subset)
+  countmut_core_main.c CLI wrapper
+  Makefile             builds the `countmut_core` binary
 ```
 
-**Performance**
-```bash
--t, --threads INTEGER  Number of parallel threads [default: auto]
--b, --bin-size INTEGER Genomic bin size in bp [default: 10000]
-```
+Both engines fill the same `SiteColumn` (per-site, per-strand base counts), so
+the two "ways" are interchangeable; the C backend implements the pileup engine.
 
-**Alternative Mutation Tagging**
-```bash
---ref-base2 TEXT       Alternative reference base for tagging (e.g., 'C')
---mut-base2 TEXT       Alternative mutation base for tagging (e.g., 'T')
---output-bam PATH      Output BAM with alternative tags (Yc, Zc)
-```
+## References this tool learns from
 
-**Quality Filters**
-```bash
---min-baseq INTEGER    Min base quality (Phred score) [default: 20]
---min-mapq INTEGER     Min mapping quality (MAPQ) [default: 0]
---max-sub INTEGER      Max substitutions (NS tag) [default: 1]
---trim-start INTEGER   Trim N bases from read 5' end (fragment orientation) [default: 2]
---trim-end INTEGER     Trim N bases from read 3' end (fragment orientation) [default: 2]
---max-unc INTEGER      Max unconverted (Zf tag) [default: 3]
---min-con INTEGER      Min converted (Yf tag) [default: 1]
-```
+- [minipileup](https://github.com/lh3/minipileup) — pileup walk, filters, allele counting
+- [perbase](https://github.com/sstadick/perbase) / [pbr](https://github.com/brentp/pbr) — mate-aware overlap dedup, base counts
+- [countmut](https://github.com/y9c/countmut) — biological strand, bisulfite NS/Zf/Yf tiers
+- [mpileup](https://github.com/y9c/mpileup) / [cpup](https://github.com/y9c/cpup) — base-count output
+- samtools `--input-fmt-option filter=STRING` — the expression grammar
 
-**Output Records**
-```bash
--p, --pad INTEGER      Motif window half-size [default: 15]
--s, --save-rest        Include other bases (o0, o1, o2 columns)
-```
+## License
 
-> **Note**: BAM files must have **NS**, **Zf**, and **Yf** tags (essential for bisulfite analysis).
-> Indices (.bai, .fai) are created automatically if missing.
-
-## Output Format
-
-TSV file with the following columns:
-
-| Column | Description |
-|--------|-------------|
-| `chrom` | Chromosome name |
-| `pos` | Genomic position (1-based) |
-| `strand` | Strand (+ or -) |
-| `motif` | Sequence context (2×pad+1 bp window) |
-| `u0`, `u1`, `u2` | **Unconverted** (reference base) counts |
-| `m0`, `m1`, `m2` | **Mutation** (mutation base only) counts |
-| `o0`, `o1`, `o2` | **Other bases** counts (with `--save-rest`) |
-
-**Count categories** (x0, x1, x2):
-- **x0 (low quality)**: Bases failing quality filters (trim region, max-sub, min-mapq, min-baseq)
-- **x1 (insufficient conversion)**: Bases from reads with insufficient conversion efficiency (high Zf or low Yf)
-- **x2 (high conversion)**: Bases from reads with high conversion efficiency (low Zf and high Yf)
-
-### Example Output
-
-Without `--save-rest`:
-
-| `chrom` | `pos` | `strand` | `motif` | `u0` | `u1` | `u2` | `m0` | `m1` | `m2` |
-|---------|--------|----------|---------|------|------|------|------|------|------|
-| `chr1`  | `10000` | `+`      | `AAG`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  |
-| `chr1`  | `10001` | `-`      | `TTC`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  |
-
-With `--save-rest`:
-
-| `chrom` | `pos` | `strand` | `motif` | `u0` | `u1` | `u2` | `m0` | `m1` | `m2` | `o0` | `o1` | `o2` |
-|---------|--------|----------|---------|------|------|------|------|------|------|------|------|------|
-| `chr1`  | `10000` | `+`      | `AAG`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  | `1`  | `2`  | `3`  |
-| `chr1`  | `10001` | `-`      | `TTC`   | `10` | `5`  | `2`  | `0`  | `0`  | `0`  | `1`  | `2`  | `3`  |
-
-
-&nbsp;
-
-<p align="center">
-  <img
-    src="https://raw.githubusercontent.com/y9c/y9c/master/resource/footer_line.svg?sanitize=true"
-  />
-</p>
-<p align="center">
-  Copyright &copy; 2025-present
-  <a href="https://github.com/y9c" target="_blank">Chang Y</a>
-</p>
-<p align="center">
-  <a href="https://github.com/y9c/countmut/blob/main/LICENSE">
-    <img src="https://img.shields.io/static/v1.svg?style=for-the-badge&label=License&message=MIT&logoColor=d9e0ee&colorA=282a36&colorB=c678dd" />
-  </a>
-</p>
+MIT

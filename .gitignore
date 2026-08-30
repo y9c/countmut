@@ -227,3 +227,8 @@ examples/*.bam
 examples/*.bai
 examples/*.fa
 examples/*.fai
+
+# C backend build artifacts
+backend/*.o
+backend/countmut_core
+backend/countmut_core.so
