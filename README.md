@@ -89,6 +89,9 @@ identical.
 - per-base filters (~55–140 ns/base) materialize **only** the fields you use
 - both engines are C; `--threads` splits the genome across workers
 
+The rationale behind the design — pain points, improvements, and the smart
+solutions — is in [`docs/design.md`](docs/design.md).
+
 ## License
 
 MIT
