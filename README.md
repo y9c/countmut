@@ -1,29 +1,16 @@
 # CountMut
 
-Counting a modification assay — bisulfite DNA, or an RNA modification library —
-always comes down to the same small question: at each site, how many reads
-still show the reference base and how many show the conversion, and what is
-that as a rate? The tools that answered it made the small thing hard. Quality
-control meant another flag for every idea. Two BAM-walking strategies existed
-and quietly disagreed exactly where the data gets hard — the deep, heavily
-overlapped sites. And a filter as cheap as `mapq >= 20` was priced once per
-aligned position instead of once per read, so something that should be free
-could silently add minutes to every whole-genome run.
+At each site in a modification assay you want the same small number: how many
+reads still show the reference base, how many show the conversion, and what
+that is as a rate. Existing tools made this hard — a flag for every QC idea,
+two BAM-walking strategies that disagreed on deep overlapping sites, and
+read-level filters priced once per aligned position instead of once per read.
 
-CountMut removes all of that with one design. QC and trimming stopped being
-flags and became expressions — the samtools filter grammar, evaluated in C.
-The two walks fill the same per-site count table, so they provably agree and
-the engine choice is only about speed. The parser reads a filter once, sees
-which variables it actually touches, and runs every read-level rule exactly
-once per read; only the six values that genuinely change per base are
-evaluated per base.
-
-It shows in the numbers. On a deep rRNA transcriptome (784 k reads, 90 Mb), a
-genome-wide `mapq >= 20` costs about half a second on top of an ~11 s run,
-the one filter that must run per base was cut roughly threefold (per-base
-evaluation ~180 → ~55 ns), and both engines output byte-identical rows. The
-mutation view ends with a `mutation_rate` column — the number that actually
-belongs in the paper.
+CountMut collapses this into one design: QC and trimming are expressions (the
+samtools grammar, in C), the two walks provably agree, and read-level rules
+run once per read. On a deep rRNA transcriptome (784 k reads / 90 Mb) a
+genome-wide `mapq >= 20` adds ~0.5 s, the per-base filter was cut ~3×, and
+the mutation view ends with a `mutation_rate`.
 
 ```bash
 pip install -e .
