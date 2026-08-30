@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "countmut"
-version = "0.0.8"
-description = "Ultra-fast strand-aware mutation counter"
+version = "0.1.0"
+description = "Unified ultra-fast strand-aware mutation counter (C backend + samtools-style -e/-p filters)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

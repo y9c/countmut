@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-08-30
+
+### Added
+- Unified tool: `--mode {mutation, base, allele}` and `--engine {auto, read-walk, pileup}`.
+- **C backend** (`backend/countmut_core`): pileup walk, per-(site, strand) base counts,
+  mate-overlap dedup, quality/conversion classification; built on a self-contained htslib
+  subset from [lh3/minipileup](https://github.com/lh3/minipileup); auto-built on first use;
+  multicore (`--threads`).
+- **samtools-style filter expressions** `-e/--expression` (read) and `-p/--pile-expression`
+  (site) — the samtools `filter=STRING` grammar (`&&`/`||`/`!`, `flag.dup`, `[NM]`, `=~`,
+  `avg(qual)`, `exists([NM])`); syntax documented in `docs/filter_grammar.md`.
+- `allele` mode with `--vcf` (minipileup style); BED include/exclude (`-b`/`-x`);
+  samtools `--incl-flags`/`--excl-flags`/`--input-fmt-option`.
+- Tests: `tests/test_unified.py`, `tests/test_expression.py`.
+
+### Changed
+- Removed granular numeric filter flags (`--min-mapq`, `--min-baseq`, `--max-sub`,
+  `--max-unc`, `--min-con`, `--trim-*`) in favour of `-e`/`-p` expressions.
+- Reverse-strand base handling fixed (no more double-complement); trim applied before
+  mate dedup (a usable mate's base is kept). See `docs/legacy_comparison.md`.
+
+### Correctness
+- Byte-identical output between the C backend and the Python read-walk/pileup engines;
+  memory-clean under AddressSanitizer.
+
 ## [0.0.8] - 2025-01-27
 
 ### Added
