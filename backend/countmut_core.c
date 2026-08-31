@@ -364,6 +364,10 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
         for (int s = 0; s < 2; ++s) {
             if (s == 0 && !emit_plus) continue;
             if (s == 1 && !emit_minus) continue;
+            int sdepth = site->ins[s] + site->del[s] + site->refskip[s] + site->fail[s];
+            for (int c = 0; c < 3; ++c)
+                for (int b = 0; b < 5; ++b) sdepth += site->cnt[s][c][b];
+            if (sdepth == 0) continue;   /* match the built-in formats: skip empty strands */
             cm_expr_output(w->expr, pos, ref_ch, motif, cnt, ins, del, rs, fl,
                            refi, muti, s, fp);
         }
