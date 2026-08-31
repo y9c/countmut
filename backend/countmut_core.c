@@ -862,12 +862,21 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         if (!(b->core.flag & BAM_FPAIRED)) ovl = 0;                       /* single-end: no mate */
         else if (b->core.mtid >= 0 && b->core.mtid != b->core.tid) ovl = 0; /* mate known elsewhere */
         else if (b->core.mpos >= 0 && b->core.mtid == b->core.tid) {
-            /* same-contig mate: hybrid, if the insert geometry is usable */
-            int insv = (int)b->core.isize; if (insv < 0) insv = -insv;
-            if (insv > 0 && insv < 2 * (int)qlen) {
-                ovl = 1;
-                if (b->core.flag & BAM_FREAD1) olo = insv - (int)qlen;
-                else ohi = 2 * (int)qlen - insv;
+            int mdiff = abs((int)b->core.mpos - (int)b->core.pos);
+            if (mdiff >= (int)qlen) ovl = 0;   /* mate spans are disjoint (|mpos-pos| >= read length):
+                                               * no reference position has two covers -> count direct,
+                                               * skipping the (pos,qname) dedup hash entirely */
+            else {
+                /* mates can overlap (starts < one read length apart): dedup the
+                 * overlap window via the hash; known fragment geometry gives the
+                 * exact window (hybrid), otherwise use the exact hash path */
+                int insv = (int)b->core.isize; if (insv < 0) insv = -insv;
+                if (insv > 0 && insv < 2 * (int)qlen) {
+                    ovl = 1;
+                    if (b->core.flag & BAM_FREAD1) olo = insv - (int)qlen;
+                    else ohi = 2 * (int)qlen - insv;
+                }
+                /* else ovl stays -1 -> exact hash (safe fallback) */
             }
         }
         /* else (paired but mate position unknown: mpos<0/mtid<0) ovl stays -1

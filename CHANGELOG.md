@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference means no separate FASTA is needed for that conversion).
 
 ### Fixed
+- **read-walk: disjoint mate pairs no longer go through the (pos,qname) dedup
+  hash.**  When `|mpos - pos| >= read length` the two mates' reference spans
+  provably never share a base, so each base can be counted directly.  The old
+  logic only took the direct path for single-end / mates-on-other-contig and
+  routed everything else through the giant dedup hash — an asymptotic
+  disaster on non-overlapping paired data (bimodal bench: read-walk 269 s ->
+  1.3 s at 1 thread, and it now beats pileup at high thread counts).  Output
+  stays byte-identical (rw == pileup, incl. genuine overlapping reads which
+  still dedup exactly).
 - **Clean errors for missing/corrupt inputs** — a nonexistent BAM used to
   segfault in `bam_hdr_read` (unchecked `bgzf_open` NULL); now it prints
   `[countmut] error: cannot open BAM file ...` and exits 3.  Also guards the

@@ -117,9 +117,10 @@ reference, that conversion also works without a separate FASTA.
 ![scaling + filter overhead](docs/perf-scaling.png)
 
 Measured on a bimodal benchmark (232 k reads, 23.2 M read-bases, deep rRNA-style
-hotspots): read-walk mutation 2.14 s @1 thread → 0.92 s @16; pileup base
-1.96 s → 0.69 s (dynamic work queue keeps deep hotspots from serializing).
-Read-constant filters run once per read (≈ free); only true per-base filters
+hotspots): composition counting reads 1.30 s @1 thread → 0.31 s @16 (read-walk)
+and 1.96 → 0.70 s (pileup); both walks are byte-identical (the dynamic work
+queue keeps deep hotspots from serializing).  Read-constant filters run once
+per read (≈ free); only true per-base filters
 `qpos/bq/base/ref/dist5/dist3` add cost (~0.3 s @8 threads for `bq and dist5`).
 `tests/make_bench_bam.py` regenerates the fixture; `scripts/plot_perf.py` re-renders
 this figure.
