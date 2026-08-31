@@ -68,16 +68,11 @@ static void usage(void) {
         "  --fa FILE             reference FASTA (required)\n"
         "  --out FILE            output (or '-'/omit for stdout)\n"
         "  --region S            chr:start-end region (default: whole file)\n"
-        "  --mode M              conversion | composition | allele  (legacy: mutation | base)\n"
         "  --output-expr STR      -o output-row template: text + {expr} cells\n"
         "  --fmt-header STR       header line for a custom -o template\n"
         "  --engine E            read-walk | pileup | auto (default auto)\n"
-        "  --vcf                 allele mode: emit VCF\n"
-        "  --ref-base C          reference base (mutation)\n"
-        "  --mut-base C          mutation base (mutation)\n"
-        "  --pad N               motif half-window\n"
-        "  --save-rest           emit o0/o1/o2\n"
-        "  --min-mapq N --min-baseq N --max-sub N --max-unc N --min-con N\n"
+        "  --vcf                 allele output: emit VCF\n"
+        "  --min-mapq N --max-sub N --max-unc N --min-con N\n"
         "  --trim-fragment-start N --trim-fragment-end N   fragment 5'/3' trim\n"
         "  --trim-r1-end N --trim-r2-start N               read R1 3'-end / R2 5'-start trim\n"
         "  --min-allele-support N --min-allele-frac F --min-strand-support N\n"
@@ -91,12 +86,6 @@ static void usage(void) {
         "  --threads N --flanking N\n");
 }
 
-static int fmt_from(const char *s) {
-    /* output-format names + legacy aliases */
-    if (!strcmp(s, "composition") || !strcmp(s, "base")) return CM_OUT_COMPOSITION;
-    if (!strcmp(s, "allele")) return CM_OUT_ALLELE;
-    return CM_OUT_CONVERSION;   /* "conversion" or legacy "mutation" (default) */
-}
 static int engine_from(const char *s) {
     if (!strcmp(s, "read-walk")) return CM_ENGINE_READWALK;
     if (!strcmp(s, "pileup")) return CM_ENGINE_PILEUP;
@@ -111,12 +100,8 @@ static int strand_from(const char *s) {
 int main(int argc, char **argv) {
     cm_config cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.out = CM_OUT_CONVERSION;
+    cfg.out = CM_OUT_COMPOSITION;
     cfg.engine = CM_ENGINE_AUTO;
-    cfg.ref_base = 'A';
-    cfg.mut_base = 'G';
-    cfg.pad = 15;
-    cfg.save_rest = 0;
     cfg.min_mapq = 0;
     cfg.min_baseq = 0;     /* quality QC is a -e filter (bq >= N): all counted bases are tier x2 */
     cfg.max_sub = -1;      /* read filters + trimming live in -e, not defaults */
@@ -150,12 +135,7 @@ int main(int argc, char **argv) {
         {"mode", required_argument, 0, 'm'},
         {"engine", required_argument, 0, 'e'},
         {"vcf", no_argument, 0, 'v'},
-        {"ref-base", required_argument, 0, 1000},
-        {"mut-base", required_argument, 0, 1001},
-        {"pad", required_argument, 0, 'p'},
-        {"save-rest", no_argument, 0, 1002},
         {"min-mapq", required_argument, 0, 'q'},
-        {"min-baseq", required_argument, 0, 'Q'},
         {"max-sub", required_argument, 0, 1003},
         {"max-unc", required_argument, 0, 1004},
         {"min-con", required_argument, 0, 1005},
@@ -190,7 +170,7 @@ int main(int argc, char **argv) {
         {0, 0, 0, 0},
     };
     int c;
-    while ((c = getopt_long(argc, argv, "b:f:o:r:m:e:p:q:Q:s:t:h", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "b:f:o:r:e:q:s:t:h", long_opts, NULL)) != -1) {
         switch (c) {
         case 2000: bam = optarg; break;
         case 2002: cfg.read_expr = optarg; break;
@@ -201,12 +181,9 @@ int main(int argc, char **argv) {
         case 'f': fa = optarg; break;
         case 'o': out = optarg; break;
         case 'r': region = optarg; break;
-        case 'm': cfg.out = fmt_from(optarg); break;
         case 'e': cfg.engine = engine_from(optarg); break;
         case 'v': cfg.vcf = 1; break;
-        case 'p': cfg.pad = atoi(optarg); break;
         case 'q': cfg.min_mapq = atoi(optarg); break;
-        case 'Q': cfg.min_baseq = atoi(optarg); break;
         case 's': cfg.strand_process = strand_from(optarg); break;
         case 't': cfg.threads = atoi(optarg); break;
         case 'b': cfg.bedfile = optarg; break;
@@ -217,9 +194,6 @@ int main(int argc, char **argv) {
         case 1101: cfg.excl_flags = parse_flags(optarg); break;
         case 1102: parse_input_fmt(optarg, &cfg.req_flags, &cfg.excl_flags, &cfg.min_mapq); break;
         case 1016: /* --mate-fix: overlap dedup is always enabled for correctness */ break;
-        case 1000: cfg.ref_base = toupper((unsigned char)optarg[0]); break;
-        case 1001: cfg.mut_base = toupper((unsigned char)optarg[0]); break;
-        case 1002: cfg.save_rest = 1; break;
         case 1003: cfg.max_sub = atoi(optarg); break;
         case 1004: cfg.max_unc = atoi(optarg); break;
         case 1005: cfg.min_con = atoi(optarg); break;
@@ -239,12 +213,13 @@ int main(int argc, char **argv) {
         }
     }
     if (!bam || !fa) { usage(); return 1; }
-    /* Validate -e / -p Lua expressions up-front (syntax error -> exit 2). */
+    /* Validate -e / -p / -o expressions up-front (syntax error -> exit 2). */
     if (!cm_expr_valid(cfg.read_expr, cfg.pile_expr, cfg.output_expr)) return 2;
-    /* Engine resolution: auto -> read-walk for mutation (sparse target set),
-     * pileup otherwise -- matches the Python engines' auto choice.
-     * Both engines are fully implemented in C and emit identical rows. */
-    if (cfg.engine == CM_ENGINE_AUTO)
-        cfg.engine = (cfg.out == CM_OUT_CONVERSION) ? CM_ENGINE_READWALK : CM_ENGINE_PILEUP;
+    /* Output format: --vcf -> allele (VCF) output; otherwise composition.
+     * There is no `--mode`; everything else is a --output-format template. */
+    cfg.out = cfg.vcf ? CM_OUT_ALLELE : CM_OUT_COMPOSITION;
+    /* Engine: pileup for the per-position counting (assume no `--engine` given
+     * or auto); both engines emit identical rows. */
+    if (cfg.engine == CM_ENGINE_AUTO) cfg.engine = CM_ENGINE_PILEUP;
     return cm_run(&cfg, bam, fa, out, region);
 }

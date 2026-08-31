@@ -32,20 +32,14 @@ class TestCLI:
         # Version can be either from pyproject.toml or package metadata
         assert "0." in result.output  # Just check it has a version
 
-    def test_resolve_auto(self):
-        """--output-format picks conversion only with BOTH targets, else composition."""
-        import click
-
-        from countmut.cli import _resolve_format
-
-        assert _resolve_format("auto", "C", "T") == ("conversion", "C", "T")
-        assert _resolve_format("auto", None, None) == ("composition", None, None)
-        assert _resolve_format("auto", None, None, vcf=True)[0] == "allele"
-        # legacy names map to the new output formats
-        assert _resolve_format("mutation", None, None) == ("conversion", "A", "G")
-        assert _resolve_format("base", "C", "T") == ("composition", "C", "T")
-        with pytest.raises(click.UsageError):
-            _resolve_format("auto", "C", None)
+    def test_no_mode_or_target_flags(self):
+        """The removed --mode / --ref-base / --mut-base flags must be gone."""
+        result = self.runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "--mode" not in result.output
+        assert "--ref-base" not in result.output
+        assert "--mut-base" not in result.output
+        assert "--output-format" in result.output
 
     def test_cli_missing_required_args(self):
         """Test CLI with missing required arguments."""
@@ -102,10 +96,6 @@ class TestCLI:
                     "/home/yec/Desktop/genes.fa",
                     "-o",
                     str(output_file),
-                    "--ref-base",
-                    "A",
-                    "--mut-base",
-                    "G",
                     "-t",
                     "2",
                     "--force",
@@ -136,8 +126,6 @@ class TestCLI:
                     "/home/yec/Desktop/genes.fa",
                     "-o",
                     str(output_file),
-                    "--pad",
-                    "20",
                     "--trim-fragment-start",
                     "3",
                     "--trim-fragment-end",

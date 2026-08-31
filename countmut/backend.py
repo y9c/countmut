@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
+from .model import EngineConfig, FilterConfig, StrandConfig
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = _PACKAGE_DIR.parent / "backend"
@@ -71,15 +71,9 @@ def _build_cmd(
     reference: str,
     output: str | None,
     fcfg: FilterConfig,
-    mcfg: MutationConfig | None,
     scfg: StrandConfig,
     ecfg: EngineConfig,
 ) -> list[str]:
-    if ecfg.mode == "auto":
-        raise ValueError(
-            "mode='auto' must be resolved to 'mutation'/'base' first "
-            "(use countmut.cli._resolve_auto)"
-        )
     cmd = [
         str(binary),
         "--bam",
@@ -88,8 +82,6 @@ def _build_cmd(
         reference,
         "--out",
         output or "-",
-        "--mode",
-        ecfg.mode,
         "--engine",
         {"read-walk": "read-walk", "pileup": "pileup", "auto": "auto"}[ecfg.engine],
         "--threads",
@@ -113,20 +105,7 @@ def _build_cmd(
         cmd += ["--fmt-header", ecfg.fmt_header]
     if ecfg.region:
         cmd += ["--region", ecfg.region]
-    if ecfg.mode == "mutation" and mcfg is not None:
-        cmd += [
-            "--ref-base",
-            mcfg.ref_base,
-            "--mut-base",
-            mcfg.mut_base,
-            "--pad",
-            str(mcfg.pad),
-        ]
-        if mcfg.save_rest:
-            cmd.append("--save-rest")
-        if mcfg.ref_base2:
-            cmd += ["--ref-base2", mcfg.ref_base2, "--mut-base2", mcfg.mut_base2 or "T"]
-    if ecfg.mode == "allele" and ecfg.vcf:
+    if ecfg.vcf:
         cmd.append("--vcf")
     # --min-depth / --min-allele-support are expressed via -p (depth >= N, g >= N)
     if ecfg.verbose:
@@ -153,7 +132,6 @@ def run_backend(
     output: str | None = None,
     *,
     fcfg: FilterConfig | None = None,
-    mcfg: MutationConfig | None = None,
     scfg: StrandConfig | None = None,
     ecfg: EngineConfig | None = None,
 ) -> dict:
@@ -189,7 +167,6 @@ def run_backend(
         reference=reference,
         output=output,
         fcfg=fcfg,
-        mcfg=mcfg,
         scfg=scfg,
         ecfg=ecfg,
     )

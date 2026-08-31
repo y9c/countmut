@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`--mode`, `--ref-base`, `--mut-base`, `--pad`, `--save-rest` removed.**
+  There is one counter and no modes: the output is the per-base composition
+  (default), an allele VCF (`--vcf`), or any row template (`--output-format`
+  `{expr}` cells; helpers `round(x,n)`/`int(x)`; `--fmt-header` for the
+  header).  A conversion ratio is just a template cell, e.g.
+  `--output-format "{pos+1}\t{ref}\t{t}/({c}+{t})"`.  The legacy
+  `CM_OUT_CONVERSION` path in the C core is dead/unreachable (fields kept for
+  the internal emit branches but never set from the CLI).
 - **"mutation"/"base" are no longer modes; the emitter is variable.**  There is
   one counting core; `--mode` is gone and the internal format names are now
   `conversion` / `composition` / `allele` (the raw `countmut_core` still accepts

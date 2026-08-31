@@ -64,33 +64,17 @@ def data(tmp_path_factory):
     return bam, fa
 
 
-MUT_XTRA = ["--ref-base", "A", "--mut-base", "G", "--pad", "2", "--save-rest"]
-
-
 def test_readwalk_pileup_identical(data):
     bam, fa = data
-    for mode in ("mutation", "base", "allele"):
-        rw = run_c(
-            bam,
-            fa,
-            mode=mode,
-            engine="read-walk",
-            extra=MUT_XTRA if mode == "mutation" else [],
-        )
-        pl = run_c(
-            bam,
-            fa,
-            mode=mode,
-            engine="pileup",
-            extra=MUT_XTRA if mode == "mutation" else [],
-        )
-        assert rw == pl, f"engines diverged in {mode} mode"
+    rw = run_c(bam, fa, engine="read-walk")
+    pl = run_c(bam, fa, engine="pileup")
+    assert rw == pl, "engines diverged in base mode"
 
 
 def test_overlap_mates_not_double_counted(data):
     bam, fa = data
     # f1 read1 fwd @5 and read2 rev @20: mates overlap ref 21-30 (1-based).
-    _h, rows = run_c(bam, fa, mode="base", engine="pileup", region="chr1:1-40")
+    _h, rows = run_c(bam, fa, engine="pileup", region="chr1:1-40")
     by_pos = {int(r[1]): r for r in rows}
     for pos in range(21, 31):
         assert pos in by_pos, f"missing position {pos}"
@@ -104,7 +88,6 @@ def test_strand_filter(data):
     _h, fwd = run_c(
         bam,
         fa,
-        mode="base",
         engine="pileup",
         region="chr1:1-40",
         extra=["--strand", "forward"],
@@ -112,7 +95,6 @@ def test_strand_filter(data):
     _h, rev = run_c(
         bam,
         fa,
-        mode="base",
         engine="pileup",
         region="chr1:1-40",
         extra=["--strand", "reverse"],
@@ -123,16 +105,9 @@ def test_strand_filter(data):
 
 def test_base_mode(data):
     bam, fa = data
-    header, rows = run_c(bam, fa, mode="base", engine="pileup")
+    header, rows = run_c(bam, fa, engine="pileup")
     assert header[:4] == ["chrom", "pos", "strand", "ref"]
     assert any(r[0] == "chr1" and r[1] == 6 for r in rows)  # first base 1-based 6
-
-
-def test_allele_mode(data):
-    bam, fa = data
-    header, rows = run_c(bam, fa, mode="allele", engine="pileup")
-    assert header == ["chrom", "pos", "ref", "depth", "ref_count", "alt", "alt_count"]
-    assert all(len(r) == 7 for r in rows)
 
 
 def test_allele_vcf(data):
@@ -148,12 +123,8 @@ def test_allele_vcf(data):
             fa,
             "--out",
             "-",
-            "--mode",
-            "allele",
             "--vcf",
             "--min-mapq",
-            "0",
-            "--min-baseq",
             "0",
             "--trim-fragment-start",
             "0",

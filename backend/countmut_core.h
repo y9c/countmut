@@ -25,20 +25,20 @@ extern "C" {
 #define CM_STRAND_FORWARD 1
 #define CM_STRAND_REVERSE 2
 
-#define CM_OUT_CONVERSION  0  /* output format: u/m conversion view        */
-#define CM_OUT_COMPOSITION 1  /* output format: per-base composition        */
-#define CM_OUT_ALLELE      2  /* output format: ref/alt / VCF               */
+#define CM_OUT_CONVERSION  0  /* legacy/unused: u/m conversion view (dead)   */
+#define CM_OUT_COMPOSITION 1  /* output format: per-base composition (default) */
+#define CM_OUT_ALLELE      2  /* output format: ref/alt / VCF                */
 
 typedef struct {
     int32_t out;             /* CM_OUT_* (output format) */
     int32_t engine;          /* CM_ENGINE_* */
     int32_t vcf;             /* allele output: emit VCF */
-    int     ref_base;        /* 'A'..'T' target base (optional) */
+    int     ref_base;        /* legacy/unused: always 0 (no --ref-base flag) */
     int     mut_base;
-    int     ref_base2;       /* 0 = unset (alternative tagging) */
+    int     ref_base2;       /* legacy/unused: always 0 */
     int     mut_base2;
-    int     pad;             /* motif half-window */
-    int     save_rest;       /* emit o0/o1/o2 */
+    int     pad;             /* legacy/unused */
+    int     save_rest;       /* legacy/unused */
     const char *output_expr; /* -o output-row template (overrides the built-in format) */
     const char *fmt_header;  /* header line for a custom output template ("" = none) */
     int     min_mapq;

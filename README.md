@@ -8,10 +8,10 @@ read-level filters priced once per aligned position instead of once per read.
 
 CountMut collapses this into one design: a single base counter, QC and trimming
 as expressions (the samtools grammar, in C), and two BAM-walks that provably
-agree. What you *see* is just an output format — a named composition / conversion
-/ allele table, or a column template you write yourself. On a deep rRNA
-transcriptome (784 k reads / 90 Mb) a genome-wide `mapq >= 20` adds ~0.5 s,
-and the per-base filter was cut ~3×.
+agree. What you *see* is an output format — the per-base table, an allele VCF,
+or a column template you write yourself. On a deep rRNA transcriptome
+(784 k reads / 90 Mb) a genome-wide `mapq >= 20` adds ~0.5 s, and the per-base
+filter was cut ~3×.
 
 ```bash
 pip install -e .
@@ -20,26 +20,23 @@ pip install -e .
 ## Quick start
 
 ```bash
-# every base, per strand                       -> composition view
+# every base, per strand                       -> composition table
 countmut -i in.bam -r ref.fa -o depth.tsv
 
-# conversion (C->T) at target sites            -> conversion view + rate
-countmut -i in.bam -r ref.fa -o conv.tsv --ref-base C --mut-base T
-
-# your own columns                            -> custom output template
-countmut -i in.bam -r ref.fa -o mine.tsv --ref-base C --mut-base T \
-  --output-format "{pos+1}\t{ref}\t{a}/{t}\t{round(mutation_rate, 3)}" \
-  --fmt-header "pos\tref\tA/T\trate"
+# your own columns (e.g. an A/T conversion ratio) -> custom output template
+countmut -i in.bam -r ref.fa -o mine.tsv \
+  --output-format "{pos+1}\t{ref}\t{a}\t{t}\t{round(t/(a+t)+0*a, 4)}" \
+  --fmt-header "pos\tref\tA\tT\trate"
 
 # alleles as VCF                               -> VCF
 countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 ```
 
-There is no `--mode` flag — the counting is the same either way; only the
-output format changes. Bare runs print the per-strand base composition;
-adding both `--ref-base`/`--mut-base` turns the same counts into the
-conversion view (with `mutation_rate`); `--vcf` gives an allele VCF. Output
-is per strand by default, and `--strandless` merges the two strands.
+There is no `--mode`, no `--ref-base`/`--mut-base`: one counter, and the output
+is whatever you choose. Bare runs print the per-strand base composition
+(`ref depth a c g t n`); `--vcf` gives an allele VCF; `--output-format` gives
+your own columns (a conversion ratio is just `{t}/({c}+{t})`). Output is per
+strand by default, and `--strandless` merges the two strands.
 
 ## Filtering with one expression instead of ten flags
 
@@ -48,8 +45,8 @@ modification read out through reverse transcription, so the conversion rate
 reports modification level rather than a variant. Whatever your sample, the
 QC and trimming live in one expression language — read-level rules are `-e`
 expressions, site-level rules `-p`, in the samtools `filter=` grammar,
-evaluated inside the C core. The old `--min-mapq` / `--min-baseq` /
-`--trim-*` flags are gone.
+evaluated inside the C core. The old `--min-mapq` / `--trim-*` flags are gone —
+write them as `-e` expressions.
 
 ```bash
 # quality, and not on the error-prone read ends
@@ -81,35 +78,31 @@ reference in [`docs/expression_reference.md`](docs/expression_reference.md).
 
 ## Output format
 
-The same per-site counts back every built-in format — `composition`
-(`chrom pos [strand] ref depth a c g t n`), `conversion` (`… motif
-u0 u1 u2 m0 m1 m2 [o0..o2] mutation_rate`, needs `--ref-base`/`--mut-base`),
-and `allele` (ref/alt table or VCF under `--vcf`).
-
-`--output-format` can instead take a **row template**: literal text plus
-`{expr}` placeholders evaluated per site over the site values (`pos`, `ref`,
-`depth`, `a c g t n`, `ins del ref_skip fail`, and — when targets are given —
-`u/m/o` and `mutation_rate`). Placeholders run real Lua, so you can compute
-cells; `round(x, n)` and `int(x)` are helpers for formatting:
+`--output-format` takes a **row template**: literal text plus `{expr}`
+placeholders evaluated per site over the site values (`pos`, `ref`, `depth`,
+`a c g t n`, `ins del ref_skip fail`). Placeholders run real Lua, so you can
+compute cells — a conversion ratio is just `{t}/({c}+{t})` — and `round(x, n)`
+and `int(x)` are helpers for formatting:
 
 ```bash
-countmut -i x -r ref -o out --ref-base C --mut-base T \
-  --output-format "{pos+1}\t{ref}\t{a}/({a}+{t})\t{round(mutation_rate, 4)}"
+countmut -i x -r ref -o out \
+  --output-format "{pos+1}\t{ref}\t{a}\t{t}\t{round(t/(a+t), 4)}"
 ```
 
 `{{` writes a literal `{`; a placeholder that yields nothing renders as an
-empty cell. `--fmt-header "…"` supplies the header line (`\t`/`\n` are
-expanded); without it custom templates print no header.
+empty cell. `--fmt-header "…"` supplies the header line (`\t`/`\n` expanded);
+without it custom templates print no header. With no `--output-format`, the
+default output is the per-strand `ref depth a c g t n` composition table
+(`--vcf` instead produces an allele VCF).
 
 ## Engines and options
 
-Two BAM-walking strategies live in the C core. `--engine auto` (default) uses
-the read walk for the targeted conversion view and the pileup walk otherwise;
-both produce identical output, so the choice only affects speed. The remaining
-options are few: input/reference/output, `--region`, `--threads/-t`,
-`--engine`, `--ref-base`, `--mut-base`, `--pad`, `--save-rest`,
-`--strandless`, `--count-indels`, `--vcf` (+ `--min-depth`,
-`--min-allele-support`), `-e`/`-p`, and `--output-format`/`--fmt-header`.
+Two BAM-walking strategies live in the C core and emit identical output, so
+the engine choice only affects speed (`--engine auto` uses the pileup walk for
+the per-position counting). The options are few: input/reference/output,
+`--region`, `--threads/-t`, `--engine`, `--strandless`, `--count-indels`,
+`--vcf` (+ `--min-depth`/`--min-allele-support`), `-e`/`-p`, and
+`--output-format`/`--fmt-header`.
 
 ## Input formats
 

@@ -143,10 +143,10 @@ low because the engine materializes only the fields the expression references,
 computes `seq`/CIGAR lazily, and skips the `read.`/`pile.` tables entirely for
 bare predicates (`read.bq >= 20` costs ~1.7× more than `bq >= 20`).
 
-**Engine choice** also matters: read-walk-mutation evaluates ~3× fewer bases
-(only `--ref-base` positions), so per-base trimming is cheapest there; at
-ultra-deep hotspots pileup is the faster walk (`-e "bq >= 20"`: 4.3 s vs
-read-walk 18 s).  Read-walk wins when the filter rejects many reads early.
+**Engine choice** also matters: at ultra-deep hotspots pileup is the faster
+walk (`-e "bq >= 20"`: 4.3 s vs read-walk 18 s); read-walk wins when a filter
+rejects many reads early (whole reads are skipped before their bases are
+walked).
 
 ## Examples
 

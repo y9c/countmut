@@ -2,11 +2,12 @@
 """
 CountMut CLI -- unified strand-aware counter with a C backend.
 
-There is no --mode flag: the output view is inferred from the inputs.
-   countmut -i x.bam -r ref.fa -o out.bed            base view (all bases)
-   countmut -i x.bam -r ref.fa -o out.tsv --ref-base A --mut-base G
-                                                        mutation view (+ rate)
-   countmut -i x.bam -r ref.fa -o out.vcf --vcf          allele VCF
+There is no --mode / --ref-base / --mut-base: one counter, and the output is
+your choice.
+   countmut -i x.bam -r ref.fa -o out.tsv                     composition table
+   countmut -i x.bam -r ref.fa -o out.tsv --output-format "{pos+1}\\t{ref}\\t{t}/({c}+{t})"
+                                                               custom columns
+   countmut -i x.bam -r ref.fa -o out.vcf --vcf                allele VCF
 
 The heavy computation runs in the bundled C core (``backend/countmut_core``);
 this wrapper drives it and renders a rich summary.
@@ -23,7 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .backend import run_backend
-from .model import EngineConfig, FilterConfig, MutationConfig, StrandConfig
+from .model import EngineConfig, FilterConfig, StrandConfig
 
 try:
     __version__ = importlib_metadata.version("countmut")
@@ -46,12 +47,9 @@ click.rich_click.OPTION_GROUPS = {
             "options": ["--engine", "--region", "--threads"],
         },
         {
-            "name": "Mutation Options",
-            "options": ["--ref-base", "--mut-base", "--pad", "--save-rest"],
-        },
-        {
-            "name": "Base/Allele Options",
+            "name": "Base/Allele / Output Options",
             "options": [
+                "--output-format",
                 "--strandless",
                 "--count-indels",
                 "--max-depth",
@@ -67,46 +65,6 @@ click.rich_click.OPTION_GROUPS = {
 }
 
 console = Console()
-
-
-_NAMED_FORMATS = ("auto", "conversion", "composition", "allele", "mutation", "base")
-_LEGACY = {"mutation": "conversion", "base": "composition"}
-
-
-def _resolve_format(
-    output_format: str,
-    ref_base: str | None,
-    mut_base: str | None,
-    vcf: bool = False,
-) -> tuple[str, str | None, str | None]:
-    """Choose the output format (the counting is one; `--mode` is gone).
-
-    - named `conversion`/`composition`/`allele` (legacy `mutation`/`base`): that
-      built-in emit;
-    - `auto` (or a row template): from the inputs -- both `--ref-base` /
-      `--mut-base` -> conversion (with mutation_rate / motif), else
-      composition; `--vcf` -> allele.
-
-    Returns (format, ref_base, mut_base); the conversion format applies the
-    historical A/G defaults when targets are omitted.
-    """
-    fmt = _LEGACY.get(output_format, output_format)
-    if fmt == "auto":
-        if vcf:
-            fmt = "allele"
-        elif ref_base and mut_base:
-            fmt = "conversion"
-        elif ref_base or mut_base:
-            raise click.UsageError(
-                "give BOTH --ref-base and --mut-base for the conversion view, "
-                "or neither for the composition view"
-            )
-        else:
-            fmt = "composition"
-    if fmt == "conversion":
-        ref_base = ref_base or "A"
-        mut_base = mut_base or "G"
-    return fmt, ref_base, mut_base
 
 
 @click.command(
@@ -152,24 +110,6 @@ def _resolve_format(
     "-t", "--threads", type=int, default=None, help="Worker threads (default: auto)"
 )
 @click.option(
-    "--ref-base",
-    default=None,
-    show_default=False,
-    help="Reference base to count from (mutation view)",
-)
-@click.option(
-    "--mut-base",
-    default=None,
-    show_default=False,
-    help="Mutation base to count (mutation view)",
-)
-@click.option(
-    "--pad", type=int, default=15, show_default=True, help="Motif half-window"
-)
-@click.option(
-    "-s", "--save-rest", is_flag=True, help="Also emit o0/o1/o2 (other bases)"
-)
-@click.option(
     "--strandless",
     is_flag=True,
     default=False,
@@ -206,13 +146,12 @@ def _resolve_format(
 @click.option(
     "--output-format",
     "output_format",
-    default="auto",
-    show_default=True,
+    default=None,
     help=(
-        "Named output format (auto|conversion|composition|allele; legacy "
-        "mutation|base) OR a row template: literal text plus {expr} placeholders "
-        'over the site values, e.g. "{pos+1}\\t{ref}\\t{a}/({a}+{t})" '
-        "(helpers: round(), int(), …).  For a template, add --fmt-header."
+        "Output-row template: literal text plus {expr} placeholders over the site "
+        'values, e.g. "{pos+1}\\t{ref}\\t{a}/({a}+{t})" (helpers: round(), int(), …). '
+        "Default output is the per-base composition; --vcf switches to an allele "
+        "VCF.  For a template, add --fmt-header."
     ),
 )
 @click.option(
@@ -233,10 +172,6 @@ def main(
     engine,
     region,
     threads,
-    ref_base,
-    mut_base,
-    pad,
-    save_rest,
     strandless,
     count_indels,
     max_depth,
@@ -247,34 +182,20 @@ def main(
     fmt_header,
     verbose,
 ):
-    """[bold green]countmut: unified ultra-fast strand-aware counter[/bold green]."""
-    # No --mode flag: one counting core, and the output is either a named format
-    # or a row template expression (-o/--output-format).  A named format or a
-    # template still resolves a counting format by the targets for the site gate.
-    output_expr = None
-    if output_format not in _NAMED_FORMATS:
-        output_expr = output_format  # a row template, not a named format
-        output_format = "auto"
-    mode, ref_base, mut_base = _resolve_format(output_format, ref_base, mut_base, vcf)
+    """[bold green]countmut: one counter, output format is yours[/bold green]."""
+    # One counting core.  Output: per-base composition by default, allele VCF
+    # with --vcf, or any row template via --output-format.
+    output_expr = output_format if output_format else None
     # Panels/logs go to stderr so stdout stays pure data.
     console = Console(stderr=True)
 
-    # The C core keeps conservative defaults for read acceptance and mutation
-    # categorisation.
+    # The C core keeps conservative defaults for read acceptance.
     fcfg = FilterConfig(
         max_depth=max_depth,
-    )
-    mcfg = (
-        MutationConfig(
-            ref_base=ref_base, mut_base=mut_base, pad=pad, save_rest=save_rest
-        )
-        if mode == "mutation"
-        else None
     )
     scfg = StrandConfig(process="both", strandless=strandless)
     ecfg = EngineConfig(
         engine=engine,
-        mode=mode,
         threads=threads,
         region=region,
         count_indels=count_indels,
@@ -293,11 +214,11 @@ def main(
     config_table.add_row("Input BAM:", os.path.abspath(samfile))
     config_table.add_row("Reference:", os.path.abspath(reference))
     config_table.add_row("Output:", os.path.abspath(output) if output else "(stdout)")
-    config_table.add_row("Mode:", mode)
+    config_table.add_row(
+        "Output:",
+        "allele VCF" if vcf else ("custom template" if output_expr else "composition"),
+    )
     config_table.add_row("Engine:", engine)
-    if mode == "mutation":
-        config_table.add_row("Substitution:", f"{ref_base} -> {mut_base}")
-        config_table.add_row("Motif pad:", str(pad))
     if read_expr:
         config_table.add_row("Read filter:", read_expr)
     if pile_expr:
@@ -320,9 +241,7 @@ def main(
         if d:
             os.makedirs(d, exist_ok=True)
 
-    stats = run_backend(
-        samfile, reference, output, fcfg=fcfg, mcfg=mcfg, scfg=scfg, ecfg=ecfg
-    )
+    stats = run_backend(samfile, reference, output, fcfg=fcfg, scfg=scfg, ecfg=ecfg)
 
     if not stats.get("success", False):
         console.print(f"[red]Error during counting: {stats.get('error')}[/red]")

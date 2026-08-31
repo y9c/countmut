@@ -33,7 +33,8 @@ class FilterConfig:
 
 @dataclass
 class MutationConfig:
-    """Which substitution to count and how many reference bases to report."""
+    """Deprecated legacy shim.  `--ref-base`/`--mut-base` were removed; write
+    conversion-style columns in a `--output-format` template instead."""
 
     ref_base: str = "A"
     mut_base: str = "G"
@@ -65,11 +66,9 @@ class EngineConfig:
     """Selects the BAM walk strategy (both are implemented in the C core)."""
 
     engine: str = "auto"  # 'auto' | 'read-walk' | 'pileup'
-    mode: str = "mutation"  # 'auto' | 'mutation' | 'base' | 'allele'
     bin_size: int = 10_000
     threads: int | None = None
     region: str | None = None
-    save_rest: bool = False
     # Lua filter expressions (evaluated inside the C core, pbr-style)
     read_expr: str | None = None  # -e read-level filter (per aligned base)
     pile_expr: str | None = None  # -p site-level filter (per site)

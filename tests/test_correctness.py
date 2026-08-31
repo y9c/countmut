@@ -94,49 +94,6 @@ def indel_data(tmp_path_factory):
 # ---------------------------------------------------------------------------
 # BUG: '-' mutation-row motif reverse-complemented with reference-forward bases
 # ---------------------------------------------------------------------------
-def test_minus_row_uses_forward_motif(motif_data):
-    bam, fa = motif_data
-    _h, rows = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="pileup",
-        region="chr1:1-8",
-        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1", "--save-rest"],
-    )
-    by = {(r[1], r[2]): r for r in rows}
-    plus = by[(2, "+")]
-    minus = by[(2, "-")]
-    assert plus[3] == "ACG"
-    assert minus[3] == "ACG", f"- row motif {minus[3]!r} must be the forward ACG"
-    # minus read: C -> u2; minus_mut read: T -> m2 (reference-forward)
-    assert (minus[6], minus[9]) == (1, 1), minus  # u2, m2
-    assert (plus[6], plus[9]) == (1, 0), plus
-
-
-def test_minus_motif_identical_both_engines(motif_data):
-    bam, fa = motif_data
-    rw = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="read-walk",
-        region="chr1:1-8",
-        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1", "--save-rest"],
-    )
-    pl = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="pileup",
-        region="chr1:1-8",
-        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1", "--save-rest"],
-    )
-    assert rw == pl
-    for r in pl[1]:
-        assert r[3] == "ACG", f"Unexpected motif {r[3]!r} on strand {r[2]}"
-
-
 def test_perbase_expr_parity_qpos(motif_data):
     """qpos-dependent per-base filters (dist5/dist3/base/bq) must be byte-identical
     between engines.  Regression: the pileup `expr_pass` memo dropped the qpos
@@ -146,66 +103,20 @@ def test_perbase_expr_parity_qpos(motif_data):
         rw = run_c(
             bam,
             fa,
-            mode="mutation",
             engine="read-walk",
             region="chr1:1-25",
-            extra=[
-                "--ref-base",
-                "C",
-                "--mut-base",
-                "T",
-                "--pad",
-                "1",
-                "--read-expr",
-                expr,
-            ],
+            extra=["--read-expr", expr],
         )
         pl = run_c(
             bam,
             fa,
-            mode="mutation",
             engine="pileup",
             region="chr1:1-25",
-            extra=[
-                "--ref-base",
-                "C",
-                "--mut-base",
-                "T",
-                "--pad",
-                "1",
-                "--read-expr",
-                expr,
-            ],
+            extra=["--read-expr", expr],
         )
         assert rw == pl, f"per-base qpos expr diverged between engines: {expr!r}"
 
 
-def test_mutation_rate_column(motif_data):
-    """mutation view now carries a mutation_rate = m/(u+m) (across tiers)."""
-    bam, fa = motif_data
-    header, rows = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="read-walk",
-        region="chr1:1-8",
-        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1", "--save-rest"],
-    )
-    assert header[-1] == "mutation_rate"
-    assert all(len(r) == 14 for r in rows)  # 10 + o0/o1/o2 + mutation_rate
-    for r in rows:
-        u = r[4] + r[5] + r[6]  # u0+u1+u2
-        m = r[7] + r[8] + r[9]  # m0+m1+m2
-        rate = float(r[-1])
-        if u + m:
-            assert abs(rate - m / (u + m)) < 1e-4, (r, u, m, rate)
-        else:
-            assert rate != rate, f"expected NaN for {r}"  # NaN rate
-
-
-# ---------------------------------------------------------------------------
-# BUG: read-walk ignored deletions / ref-skips (diverged from pileup)
-# ---------------------------------------------------------------------------
 def test_indel_parity(indel_data):
     bam, fa = indel_data
     results = {}
@@ -213,7 +124,6 @@ def test_indel_parity(indel_data):
         _h, rows = run_c(
             bam,
             fa,
-            mode="base",
             engine=engine,
             region="chr1:31-45",
             extra=["--count-indels"],
@@ -240,7 +150,6 @@ def test_strand_gate_depths(motif_data):
     fwd = run_c(
         bam,
         fa,
-        mode="base",
         engine="pileup",
         region="chr1:1-10",
         extra=["--strand", "forward"],
@@ -255,70 +164,25 @@ def test_strand_gate_depths(motif_data):
 # ---------------------------------------------------------------------------
 def test_min_depth(motif_data):
     bam, fa = motif_data
-    for mode, xtra in (("base", []), ("allele", [])):
+    for xtra in ([], ["--vcf"]):
         _h, rows = run_c(
             bam,
             fa,
-            mode=mode,
             engine="pileup",
             region="chr1:1-25",
             extra=xtra + ["--min-depth", "1000"],
         )
-        assert rows == [], f"min_depth=1000 should drop all {mode} rows"
+        assert rows == [], "min_depth=1000 should drop all rows"
 
 
 # ---------------------------------------------------------------------------
 # BUG: allele header/row shape + min_allele_support no-op
-# ---------------------------------------------------------------------------
-def test_allele_mode_shape_and_support(motif_data):
-    bam, fa = motif_data
-    header, rows = run_c(
-        bam,
-        fa,
-        mode="allele",
-        engine="pileup",
-        region="chr1:1-25",
-        extra=["--min-allele-support", "100"],
-    )
-    assert header == ["chrom", "pos", "ref", "depth", "ref_count", "alt", "alt_count"]
-    assert all(len(r) == 7 for r in rows)
-    assert all(r[5] == "." and r[6] == 0 for r in rows)
-
-
-# ---------------------------------------------------------------------------
-# case-insensitive --ref-base / --mut-base
-# ---------------------------------------------------------------------------
-def test_mutation_config_case(motif_data):
-    bam, fa = motif_data
-    lo = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="pileup",
-        region="chr1:1-8",
-        extra=["--ref-base", "c", "--mut-base", "t", "--pad", "1"],
-    )
-    up = run_c(
-        bam,
-        fa,
-        mode="mutation",
-        engine="pileup",
-        region="chr1:1-8",
-        extra=["--ref-base", "C", "--mut-base", "T", "--pad", "1"],
-    )
-    assert lo == up
-    assert len(lo[1]) > 0
-
-
-# ---------------------------------------------------------------------------
-# -e / -p Lua filters in C (both engines)
 # ---------------------------------------------------------------------------
 def test_expr_e_read_filter(motif_data):
     bam, fa = motif_data
     _h, rows = run_c(
         bam,
         fa,
-        mode="base",
         engine="pileup",
         region="chr1:1-10",
         extra=["--read-expr", "flags & 16 == 0"],
@@ -332,7 +196,6 @@ def test_expr_p_pile_filter(motif_data):
     _h, rows = run_c(
         bam,
         fa,
-        mode="base",
         engine="pileup",
         region="chr1:1-10",
         extra=["--pile-expr", "ref == 'A'"],
@@ -347,38 +210,16 @@ def test_expr_identical_both_engines(motif_data):
         rw = run_c(
             bam,
             fa,
-            mode="mutation",
             engine="read-walk",
             region="chr1:1-8",
-            extra=[
-                "--ref-base",
-                "C",
-                "--mut-base",
-                "T",
-                "--pad",
-                "1",
-                "--save-rest",
-                "--read-expr",
-                expr,
-            ],
+            extra=["--read-expr", expr],
         )
         pl = run_c(
             bam,
             fa,
-            mode="mutation",
             engine="pileup",
             region="chr1:1-8",
-            extra=[
-                "--ref-base",
-                "C",
-                "--mut-base",
-                "T",
-                "--pad",
-                "1",
-                "--save-rest",
-                "--read-expr",
-                expr,
-            ],
+            extra=["--read-expr", expr],
         )
         assert rw == pl, f"engines diverged with -e {expr!r}"
 
@@ -431,7 +272,6 @@ def test_readwalk_proper_paired_overlap_dedup(tmp_path):
     _h, rows = run_c(
         bam,
         fa,
-        mode="base",
         engine="read-walk",
         region="chr1:1-20",
         extra=["--trim-fragment-start", "0", "--trim-fragment-end", "0"],
@@ -449,31 +289,20 @@ def test_expr_invalid_syntax(motif_data):
         run_c(
             bam,
             fa,
-            mode="mutation",
             engine="pileup",
             extra=["--read-expr", "(( not lua !!"],
         )
 
 
 def test_expr_file_like_usage(motif_data, tmp_path):
-    """-p with a ref base + depth filter (countmut doc example style)."""
+    """-p pile-site filter selects which sites to report."""
     bam, fa = motif_data
     _h, rows = run_c(
         bam,
         fa,
-        mode="mutation",
         engine="pileup",
         region="chr1:1-8",
-        extra=[
-            "--ref-base",
-            "C",
-            "--mut-base",
-            "T",
-            "--pad",
-            "1",
-            "--pile-expr",
-            "ref == 'C' and g >= 0",
-        ],
+        extra=["--pile-expr", "ref == 'C' and g >= 0"],
     )
     assert rows
     for r in rows:
@@ -488,10 +317,9 @@ def test_long_run_of_bang_operator(tmp_path):
     _h, rows = run_c(
         bam,
         fa,
-        mode="mutation",
         engine="read-walk",
         region="chrX:1-200",
-        extra=["--ref-base", "A", "--mut-base", "C", "--read-expr", expr],
+        extra=["--read-expr", expr],
     )
     assert rows, "unary-bang expression did not evaluate (overflow/regression)"
 
@@ -523,17 +351,9 @@ def test_long_read_seq_not_truncated(tmp_path):
     _h, rows = run_c(
         bam,
         fa,
-        mode="mutation",
         engine="read-walk",
         region="chrL:1-200",
-        extra=[
-            "--ref-base",
-            "A",
-            "--mut-base",
-            "C",
-            "--read-expr",
-            "slen(seq) == 2000",
-        ],
+        extra=["--read-expr", "slen(seq) == 2000"],
     )
     assert rows, "seq was truncated (slen(seq) != 2000) for a 2000 bp read"
 
@@ -582,53 +402,34 @@ def test_sam_input_matches_bam(motif_data, tmp_path):
     with gzip.open(samgz, "wt") as f:
         f.write(htxt)
     args = [
-        "--ref-base",
-        "C",
-        "--mut-base",
-        "T",
-        "--pad",
-        "1",
         "--read-expr",
         "bq >= 20 and dist5 >= 2",
     ]
-    _h, from_bam = run_c(
-        bam, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
-    )
-    _h, from_sam = run_c(
-        sam, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
-    )
+    _h, from_bam = run_c(bam, fa, engine="pileup", region="chr1:1-8", extra=args)
+    _h, from_sam = run_c(sam, fa, engine="pileup", region="chr1:1-8", extra=args)
     assert from_bam and from_bam == from_sam, "SAM input diverged from BAM"
-    _h, from_samgz = run_c(
-        samgz, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
-    )
+    _h, from_samgz = run_c(samgz, fa, engine="pileup", region="chr1:1-8", extra=args)
     assert from_bam == from_samgz, "gzipped SAM input diverged from BAM"
 
 
 def test_output_format_template(motif_data):
     """--output-format as a row template: header via --fmt-header (\\t expanded),
-    cells computed from the site namespace (incl. derived u/m/mutation_rate)."""
+    cells computed from the site namespace."""
     bam, fa = motif_data
-    tpl = "{pos+1}\t{ref}\t{a}/({a}+{t})\t{round(mutation_rate, 3)}"
+    tpl = "{pos+1}\t{ref}\t{a}\t{t}\t{round(a/(a+t), 3)}"
     header, rows = run_c(
         bam,
         fa,
-        mode="conversion",
         engine="pileup",
         region="chr1:1-8",
         extra=[
-            "--ref-base",
-            "C",
-            "--mut-base",
-            "T",
-            "--pad",
-            "1",
             "--output-expr",
             tpl,
             "--fmt-header",
-            "pos\tref\tat_slash_t\trate",
+            "pos\tref\ta\tt\tat_ratio",
         ],
     )
-    assert header == ["pos", "ref", "at_slash_t", "rate"], header
-    assert rows and all(len(r) == 4 for r in rows), rows[:2]
+    assert header == ["pos", "ref", "a", "t", "at_ratio"], header
+    assert rows and all(len(r) == 5 for r in rows), rows[:2]
     r0 = rows[0]
     assert int(r0[0]) >= 1 and r0[1] in "ACGTN"
