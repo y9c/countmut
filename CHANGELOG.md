@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference means no separate FASTA is needed for that conversion).
 
 ### Fixed
+- **read-walk dedup-hash was O(n^2) at depth (root cause of the slowness).**
+  Klib's `kh_int64_hash_func` has weak low bits, and our
+  `(pos, qname-id)` and position keys have near-monotonic low bits as reads are
+  inserted in coordinate order -- so klib's open addressing degenerated to long
+  probe chains as the hash grew.  SplitMix64-style mixers for the `posq` and
+  `posi` keys fix it: on the overlapping-pair bench, read-walk went 54 s -> 2.7 s
+  (1 thread) / 32 s -> 0.98 s (16 threads); the earlier 269 s non-overlap number
+  was the same bug.  Output stays byte-identical (rw == pileup), overlapping
+  reads still dedup exactly, ASan+UBSan clean, 48 tests pass.
 - **read-walk: disjoint mate pairs no longer go through the (pos,qname) dedup
   hash.**  When `|mpos - pos| >= read length` the two mates' reference spans
   provably never share a base, so each base can be counted directly.  The old

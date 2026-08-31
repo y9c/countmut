@@ -628,8 +628,18 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
  * qname ids come from a per-region qname->id table, so the (pos,qname) overlap
  * dedup is unchanged but keys are plain integers (no strdup per entry). */
 typedef struct { int64_t pos; int qid; } posq_key;
+/* SplitMix64-style finalizer: klib's kh_int64_hash_func has weak low bits, and
+ * our keys (pos small, qid increasing in insertion order) made those low bits
+ * near-monotonic, degrading klib's open addressing to O(n) per insert (O(n^2)
+ * total) as the hash grew at deep sites.  This mix scrambles the low bits so
+ * insertion order no longer correlates with bucket order. */
 static inline khint_t posq_hash(posq_key k) {
-    return kh_int64_hash_func(k.pos) ^ (khint_t)k.qid;
+    uint64_t z = (uint64_t)k.pos * 0x9E3779B97F4A7C15ull
+               ^ (uint64_t)(k.qid + 1) * 0xBF58476D1CE4E5B9ull;
+    z ^= z >> 30; z *= 0xBF58476D1CE4E5B9ull;
+    z ^= z >> 27; z *= 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return (khint_t)z;
 }
 static inline int posq_equal(posq_key a, posq_key b) {
     return a.pos == b.pos && a.qid == b.qid;
@@ -637,8 +647,16 @@ static inline int posq_equal(posq_key a, posq_key b) {
 KHASH_INIT(posq, posq_key, int, 1, posq_hash, posq_equal)
 KHASH_INIT(qn2id, char *, int, 1, kh_str_hash_func, kh_str_hash_equal)
 
-/* pos -> sitemap slot */
-KHASH_INIT(posi, khint64_t, int, 1, kh_int64_hash_func, kh_int64_hash_equal)
+/* pos -> sitemap slot; strong mixer (see the posq_hash note -- klib's low bits
+ * are weak and the direct path inserts positions in monotonic order) */
+static inline khint_t posi_hash(khint64_t key) {
+    uint64_t z = (uint64_t)key * 0x9E3779B97F4A7C15ull;
+    z ^= z >> 30; z *= 0xBF58476D1CE4E5B9ull;
+    z ^= z >> 27; z *= 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return (khint_t)z;
+}
+KHASH_INIT(posi, khint64_t, int, 1, posi_hash, kh_int64_hash_equal)
 
 /* winner of a (pos,qname) dedup bucket */
 typedef struct { int mapq, r1, qual, strand, base; } rw_w;
