@@ -107,6 +107,10 @@ def _build_cmd(
         cmd += ["--read-expr", ecfg.read_expr]
     if ecfg.pile_expr:
         cmd += ["--pile-expr", ecfg.pile_expr]
+    if ecfg.output_expr:
+        cmd += ["--output-expr", ecfg.output_expr]
+    if ecfg.fmt_header:
+        cmd += ["--fmt-header", ecfg.fmt_header]
     if ecfg.region:
         cmd += ["--region", ecfg.region]
     if ecfg.mode == "mutation" and mcfg is not None:

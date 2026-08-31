@@ -178,7 +178,8 @@ typedef struct {
 
 static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
                         const char *bedfile, const char *exclude,
-                        const char *read_expr, const char *pile_expr) {
+                        const char *read_expr, const char *pile_expr,
+                        const char *output_expr) {
     w->kh = kh_init(qn);
     w->sel = w->mapq_a = w->r1_a = w->q_a = NULL;
     w->sel_cap = 0;
@@ -189,7 +190,7 @@ static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
     w->fai = fai_load(fa);
     w->inc_bed = bedfile ? bed_read(bedfile) : NULL;
     w->exc_bed = exclude ? bed_read(exclude) : NULL;
-    w->expr = cm_expr_new(read_expr, pile_expr);
+    w->expr = cm_expr_new(read_expr, pile_expr, output_expr);
     w->rfc = kh_init(rfc);
     w->pexc = kh_init(pex);
 }
@@ -301,14 +302,26 @@ typedef struct {
     int nthreads;
 } work_t;
 
-/* Write the header line for the configured mode. */
+/* Write the header line for the configured output format. */
 static void write_header(FILE *fp, const cm_config *cfg) {
-    if (cfg->mode == CM_MODE_MUTATION) {
+    if (cfg->output_expr && cfg->output_expr[0]) {   /* custom -o template */
+        if (cfg->fmt_header && cfg->fmt_header[0]) {
+            for (const char *p = cfg->fmt_header; *p; ++p) {   /* expand \t \n \\ */
+                if (*p == '\\' && p[1] == 't') { fputc('\t', fp); ++p; }
+                else if (*p == '\\' && p[1] == 'n') { fputc('\n', fp); ++p; }
+                else if (*p == '\\' && p[1] == '\\') { fputc('\\', fp); ++p; }
+                else fputc(*p, fp);
+            }
+            fputc('\n', fp);
+        }
+        return;
+    }
+    if (cfg->out == CM_OUT_CONVERSION) {
         fputs("chrom\tpos\tstrand\tmotif\tu0\tu1\tu2\tm0\tm1\tm2", fp);
         if (cfg->save_rest) fputs("\to0\to1\to2", fp);
         fputs("\tmutation_rate", fp);
         fputc('\n', fp);
-    } else if (cfg->mode == CM_MODE_BASE) {
+    } else if (cfg->out == CM_OUT_COMPOSITION) {
         if (cfg->strandless) fputs("chrom\tpos\tref\tdepth\ta\tc\tg\tt\tn", fp);
         else fputs("chrom\tpos\tstrand\tref\tdepth\ta\tc\tg\tt\tn", fp);
         if (cfg->count_indels) fputs("\tins\tdel\tref_skip\tfail", fp);
@@ -328,7 +341,35 @@ static void write_header(FILE *fp, const cm_config *cfg) {
 static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *fp,
                       int tid, int64_t pos, char ref_ch, const site_t *site,
                       int emit_plus, int emit_minus) {
-    if (cfg->mode == CM_MODE_MUTATION) {
+    /* custom output template (-o): evaluate it per emitted strand and write
+     * exactly what it returns; bypasses the built-in formats. */
+    if (w != NULL && w->expr && cm_expr_has_output(w->expr)) {
+        int cnt[5] = {0};
+        int ins = 0, del = 0, rs = 0, fl = 0;
+        for (int s = 0; s < 2; ++s) {
+            for (int c = 0; c < 3; ++c)
+                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
+            ins += site->ins[s]; del += site->del[s]; rs += site->refskip[s]; fl += site->fail[s];
+        }
+        const char *motif = NULL;
+        if (cfg->out == CM_OUT_CONVERSION && w->chr_len > 0) {
+            int mlen = cfg->pad * 2 + 1;
+            for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2)
+                w->motif_buf[k2 - ((int)pos - cfg->pad)] =
+                    (k2 < 0 || k2 >= w->chr_len) ? 'N' : (char)toupper((unsigned char)w->chr_seq[k2]);
+            w->motif_buf[mlen] = 0;
+            motif = w->motif_buf;
+        }
+        int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
+        for (int s = 0; s < 2; ++s) {
+            if (s == 0 && !emit_plus) continue;
+            if (s == 1 && !emit_minus) continue;
+            cm_expr_output(w->expr, pos, ref_ch, motif, cnt, ins, del, rs, fl,
+                           refi, muti, s, fp);
+        }
+        return;
+    }
+    if (cfg->out == CM_OUT_CONVERSION) {
         int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
         int mlen = cfg->pad * 2 + 1;
         int motif_ready = 0;   /* build the reference-forward window once */
@@ -363,7 +404,7 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
                               : strtod("nan", (char **)NULL));
             fputc('\n', fp);
         }
-    } else if (cfg->mode == CM_MODE_BASE) {
+    } else if (cfg->out == CM_OUT_COMPOSITION) {
         if (!cfg->strandless) {
             for (int s = 0; s < 2; ++s) {
                 if (s == 0 && !emit_plus) continue;
@@ -433,7 +474,7 @@ static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
         ins += site->ins[s]; del += site->del[s]; rs += site->refskip[s]; fl += site->fail[s];
     }
     const char *motif = NULL;
-    if (cfg->mode == CM_MODE_MUTATION && w->chr_len > 0) {
+    if (cfg->out == CM_OUT_CONVERSION && w->chr_len > 0) {
         int mlen = cfg->pad * 2 + 1;
         for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2) {
             w->motif_buf[k2 - ((int)pos - cfg->pad)] =
@@ -442,7 +483,8 @@ static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
         w->motif_buf[mlen] = 0;
         motif = w->motif_buf;
     }
-    return cm_expr_pile(x, pos, ref_ch, motif, cnt, ins, del, rs, fl);
+    int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
+    return cm_expr_pile(x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti);
 }
 
 /* Fetch + uppercase the chromosome sequence once per tid (instead of calling
@@ -483,7 +525,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
         if (n == 0) continue;
         const char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
 
-        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && ref_ch != cfg->ref_base)
+        if (cfg->out == CM_OUT_CONVERSION && cfg->ref_base && ref_ch != cfg->ref_base)
             continue;
 
         if (n > w->sel_cap) {
@@ -546,7 +588,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             uint8_t nt = bam_seqi(bam_get_seq(b), p->qpos);
             int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
             int qual = (int)bam_get_qual(b)[p->qpos];
-            if (cfg->mode == CM_MODE_MUTATION) {
+            if (cfg->out == CM_OUT_CONVERSION) {
                 site.cnt[s][(qual >= cfg->min_baseq) ? 2 : 0][base_i]++;
             } else {
                 site.cnt[s][0][base_i]++;
@@ -689,7 +731,7 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
                          khash_t(posq) *h, rw_w *wins, int *wins_cap, int *wins_n) {
     uint32_t qlen = b->core.l_qseq;
     if (qpos >= qlen) return wins;
-    if (!already_target && cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
+    if (!already_target && cfg->out == CM_OUT_CONVERSION && cfg->ref_base) {
         if (ref_pos >= w->chr_len || w->chr_seq[ref_pos] != cfg->ref_base) return wins;
     }
     if (s == 0) {
@@ -709,7 +751,7 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
     int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
     int qual = (int)bam_get_qual(b)[qpos];
     if (direct) {
-        int cat = (cfg->mode == CM_MODE_MUTATION)
+        int cat = (cfg->out == CM_OUT_CONVERSION)
             ? ((qual >= cfg->min_baseq) ? 2 : 0) : 0;
         sm_get(sm, ref_pos)->cnt[s][cat][base_i]++;
         return wins;
@@ -748,7 +790,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
 
     /* sorted target positions (mutation mode) for the indel-free fast path */
     int *tgt = NULL; int tgt_n = 0;
-    if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && end > beg) {
+    if (cfg->out == CM_OUT_CONVERSION && cfg->ref_base && end > beg) {
         tgt = (int *)malloc((size_t)(end - beg) * sizeof(int));
         for (int p = beg; p < end && p < w->chr_len; ++p)
             if (w->chr_seq[p] == (char)cfg->ref_base)
@@ -777,7 +819,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                     if (rcur < end && rcur + len > beg) {
                         int64_t lo = rcur > beg ? rcur : beg;
                         int64_t hi = rcur + len < end ? rcur + len : end;
-                        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
+                        if (cfg->out == CM_OUT_CONVERSION && cfg->ref_base) {
                             for (int64_t p = lo; p < hi; ++p)
                                 if ((int)p < w->chr_len && w->chr_seq[p] == cfg->ref_base)
                                     sm_get(&sm, p)->fail[s]++;
@@ -877,7 +919,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                     if (rcur < end && rcur + len > beg) {
                         int64_t lo2 = rcur > beg ? rcur : beg;
                         int64_t hi2 = rcur + len < end ? rcur + len : end;
-                        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base) {
+                        if (cfg->out == CM_OUT_CONVERSION && cfg->ref_base) {
                             for (int64_t p = lo2; p < hi2; ++p)
                                 if ((int)p < w->chr_len && w->chr_seq[p] == cfg->ref_base) {
                                     if (is_del) sm_get(&sm, p)->del[s]++; else sm_get(&sm, p)->refskip[s]++;
@@ -901,7 +943,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         if (!kh_exist(h, k)) continue;
         int64_t pos = kh_key(h, k).pos;
         const rw_w *win = &wins[kh_val(h, k)];
-        int cat = (cfg->mode == CM_MODE_MUTATION)
+        int cat = (cfg->out == CM_OUT_CONVERSION)
             ? ((win->qual >= cfg->min_baseq) ? 2 : 0) : 0;
         site_t *st = sm_get(&sm, pos);
         st->cnt[win->strand][cat][win->base]++;
@@ -917,7 +959,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         int64_t pos = ord[i].pos;
         if (pos < 0 || pos >= w->chr_len) continue;
         char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
-        if (cfg->mode == CM_MODE_MUTATION && cfg->ref_base && ref_ch != cfg->ref_base) continue;
+        if (cfg->out == CM_OUT_CONVERSION && cfg->ref_base && ref_ch != cfg->ref_base) continue;
         if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         /* -p site filter */
@@ -1149,7 +1191,7 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     worker_t *workers = (worker_t *)calloc(nthreads, sizeof(worker_t));
     for (int i = 0; i < nthreads; ++i)
         worker_init(&workers[i], bam, fa, cfg->pad, cfg->bedfile, cfg->exclude,
-                    cfg->read_expr, cfg->pile_expr);
+                    cfg->read_expr, cfg->pile_expr, cfg->output_expr);
     for (int i = 0; i < nthreads; ++i) {
         if (!workers[i].fp || !workers[i].idx) {
             fprintf(stderr, "[countmut] error: cannot open BAM/index '%s'\n", bam);

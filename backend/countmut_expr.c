@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <regex.h>
 #include <alloca.h>
+#include <math.h>
 
 #include "countmut_expr.h"
 #include <lua.h>
@@ -25,6 +26,7 @@ struct cm_expr {
     lua_State *L;
     int read_ref;   /* LUA_NOREF if no -e */
     int pile_ref;   /* LUA_NOREF if no -p */
+    int output_ref; /* LUA_NOREF if no -o (output-row template) */
     int need_seq;    /* read seq / read.sequence */
     int need_qual;   /* raw quality string */
     int need_library;/* library / read.library / LB */
@@ -184,6 +186,23 @@ static int l_pow (lua_State *L) {
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_call(L, 2, 1);
+    return 1;
+}
+
+/* round(x [, n]) -- round to n decimal digits (n>=0), half away from zero */
+static int l_round(lua_State *L) {
+    double x = luaL_checknumber(L, 1);
+    lua_Integer n = luaL_optinteger(L, 2, 0);
+    double f = 1.0;
+    if (n > 0)      for (lua_Integer i = 0; i < n; ++i) f *= 10.0;
+    else if (n < 0) for (lua_Integer i = 0; i < -n; ++i) f /= 10.0;
+    lua_pushnumber(L, floor(x * f + 0.5) / f);
+    return 1;
+}
+/* int(x) -- truncate toward zero */
+static int l_int(lua_State *L) {
+    double x = luaL_checknumber(L, 1);
+    lua_pushnumber(L, (x < 0) ? ceil(x) : floor(x));
     return 1;
 }
 
@@ -489,9 +508,79 @@ static int compile_chunk(lua_State *L, const char *expr, const char *what,
     return luaL_ref(L, LUA_REGISTRYINDEX);
 }
 
-cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr) {
+/* Build a Lua source string from an output-row template:
+ *
+ *   literal text -> a Lua string literal (" -> \"; backslash escapes such as
+ *                  \t \\ are copied verbatim so Lua interprets them)
+ *   {expr}       -> tostring((expr) or '')          (nil -> empty cell)
+ *   {{           -> a literal '{'
+ *
+ * The result is `return (lit .. tostring((e1) or '') .. lit2 ...)`.
+ * Returns a malloc'd string, or NULL on an unbalanced '{'. */
+static char *build_output_chunk(const char *tpl) {
+    size_t n = strlen(tpl);
+    char *out = (char *)malloc(10 * n + 64);
+    if (out == NULL) return NULL;
+    size_t j = 0;
+    memcpy(out + j, "return (", 8); j += 8;
+    int first = 1;
+    size_t i = 0;
+    while (i < n) {
+        if (tpl[i] == '{') {
+            if (i + 1 < n && tpl[i + 1] == '{') {          /* literal '{' */
+                if (!first) { out[j++] = '.'; out[j++] = '.'; }
+                out[j++] = '"'; out[j++] = '{'; out[j++] = '"';
+                first = 0; i += 2;
+                continue;
+            }
+            size_t e = i + 1;
+            while (e < n && tpl[e] != '}') e++;
+            if (e >= n) { free(out); return NULL; }        /* unbalanced '{' */
+            if (!first) { out[j++] = '.'; out[j++] = '.'; }
+            memcpy(out + j, "tostring((", 10); j += 10;
+            memcpy(out + j, tpl + i + 1, e - i - 1); j += e - i - 1;
+            memcpy(out + j, ") or '')", 8); j += 8;
+            first = 0;
+            i = e + 1;
+            continue;
+        }
+        size_t s = i;
+        while (i < n && tpl[i] != '{') i++;                /* literal run [s,i) */
+        if (i > s) {
+            if (!first) { out[j++] = '.'; out[j++] = '.'; }
+            out[j++] = '"';
+            for (size_t k = s; k < i; ++k) {
+                char c = tpl[k];
+                if (c == '"') out[j++] = '\\';
+                out[j++] = c;
+            }
+            out[j++] = '"';
+            first = 0;
+        }
+    }
+    out[j++] = ')';
+    out[j] = 0;
+    return out;
+}
+
+static int compile_output(lua_State *L, const char *tpl) {
+    char *src = build_output_chunk(tpl);
+    if (src == NULL) return LUA_NOREF;
+    if (luaL_loadstring(L, src) != LUA_OK) {
+        fprintf(stderr, "[countmut] invalid output template: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+        free(src);
+        return LUA_NOREF;
+    }
+    free(src);
+    return luaL_ref(L, LUA_REGISTRYINDEX);
+}
+
+cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr,
+                     const char *output_tpl) {
     if ((read_expr == NULL || read_expr[0] == '\0')
-        && (pile_expr == NULL || pile_expr[0] == '\0'))
+        && (pile_expr == NULL || pile_expr[0] == '\0')
+        && (output_tpl == NULL || output_tpl[0] == '\0'))
         return NULL;
     cm_expr *x = (cm_expr *)calloc(1, sizeof(*x));
     if (x == NULL) return NULL;
@@ -501,6 +590,7 @@ cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr) {
     x->L = L;
     x->read_ref = LUA_NOREF;
     x->pile_ref = LUA_NOREF;
+    x->output_ref = LUA_NOREF;
 
     lua_newtable(L); lua_pushvalue(L, -1); lua_setglobal(L, "read");
     x->read_reg = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -537,6 +627,9 @@ cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr) {
     lua_pushcfunction(L, l_log);  lua_setglobal(L, "log");
     lua_pushcfunction(L, l_exp);  lua_setglobal(L, "exp");
     lua_pushcfunction(L, l_pow);  lua_setglobal(L, "pow");
+    /* output-formatting helpers */
+    lua_pushcfunction(L, l_round); lua_setglobal(L, "round");
+    lua_pushcfunction(L, l_int);   lua_setglobal(L, "int");
     lua_pushcfunction(L, l_n5);   lua_setglobal(L, "n5");
     lua_pushcfunction(L, l_n3);   lua_setglobal(L, "n3");
     lua_getglobal(L, "read");
@@ -562,15 +655,19 @@ cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr) {
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (output_tpl && output_tpl[0])
+        x->output_ref = compile_output(L, output_tpl);
     return x;
 }
 
-int cm_expr_valid(const char *read_expr, const char *pile_expr) {
-    cm_expr *x = cm_expr_new(read_expr, pile_expr);
+int cm_expr_valid(const char *read_expr, const char *pile_expr,
+                  const char *output_tpl) {
+    cm_expr *x = cm_expr_new(read_expr, pile_expr, output_tpl);
     if (x == NULL) return 1;
     int ok
         = ((read_expr == NULL || read_expr[0] == '\0' || x->read_ref != LUA_NOREF)
-           && (pile_expr == NULL || pile_expr[0] == '\0' || x->pile_ref != LUA_NOREF));
+           && (pile_expr == NULL || pile_expr[0] == '\0' || x->pile_ref != LUA_NOREF)
+           && (output_tpl == NULL || output_tpl[0] == '\0' || x->output_ref != LUA_NOREF));
     cm_expr_free(x);
     return ok;
 }
@@ -583,6 +680,7 @@ void cm_expr_free(cm_expr *x) {
 
 int cm_expr_has_read(const cm_expr *x) { return x != NULL && x->read_ref != LUA_NOREF; }
 int cm_expr_has_pile(const cm_expr *x) { return x != NULL && x->pile_ref != LUA_NOREF; }
+int cm_expr_has_output(const cm_expr *x) { return x != NULL && x->output_ref != LUA_NOREF; }
 
 int cm_expr_read_constant(const cm_expr *x) {
     return x != NULL && x->read_ref != LUA_NOREF
@@ -705,10 +803,15 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
     return run_chunk(L, x->read_ref);
 }
 
-int cm_expr_pile(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
-                 const int cnt[5], int ins, int del, int rs, int fl) {
-    if (x == NULL || x->pile_ref == LUA_NOREF) return 1;
-    lua_State *L = x->L;
+/* Populate the per-site pile namespace (flat globals + pile.* table) used by
+ * both -p and the -o output template.  cnt[5] are A/C/G/T/N totals (all tiers
+ * and strands), refi/muti are base_to_index() of the ref/mut targets (-1 if
+ * unset) -- when both are valid the derived conversion fields u/m/o and
+ * mutation_rate become available; strand_s (0/1) marks the emitted strand
+ * ('+'/'-') or -1 for the site-level (-p) evaluation. */
+static void pile_set_all(lua_State *L, cm_expr *x, int64_t pos, char ref_ch,
+                         const char *motif, const int cnt[5], int ins, int del,
+                         int rs, int fl, int refi, int muti, int strand_s) {
     int depth = 0;
     for (int i = 0; i < 5; ++i) depth += cnt[i];
     char refstr[2] = { ref_ch ? ref_ch : 'N', 0 };
@@ -736,6 +839,67 @@ int cm_expr_pile(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
     p_int(x, "ref_skip", rs);
     p_int(x, "fail", fl);
     p_str(x, "motif", mot);
+    if (strand_s == 0 || strand_s == 1) {
+        p_str(x, "strand", strand_s ? "-" : "+");
+        p_int(x, "strand_code", strand_s ? -1 : 1);
+    }
+    if (refi >= 0 && muti >= 0) {
+        int u = cnt[refi], m = cnt[muti], o = depth - u - m;
+        p_int(x, "u", u); p_int(x, "m", m); p_int(x, "o", o);
+        p_int(x, "U", u); p_int(x, "M", m); p_int(x, "O", o);
+        double rate = (u + m) ? (double)m / (double)(u + m) : 0.0 / 0.0;
+        lua_pushnumber(L, rate); lua_setglobal(L, "mutation_rate");
+    }
+}
 
+int cm_expr_pile(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
+                 const int cnt[5], int ins, int del, int rs, int fl,
+                 int refi, int muti) {
+    if (x == NULL || x->pile_ref == LUA_NOREF) return 1;
+    lua_State *L = x->L;
+    pile_set_all(L, x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti, -1);
     return run_chunk(L, x->pile_ref);
+}
+
+/* per-strand row writer for the -o output template */
+int cm_expr_output(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
+                   const int cnt[5], int ins, int del, int rs, int fl,
+                   int refi, int muti, int strand_s, FILE *fp) {
+    if (x == NULL || x->output_ref == LUA_NOREF) return 0;
+    lua_State *L = x->L;
+    pile_set_all(L, x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti,
+                 strand_s);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, x->output_ref);
+    if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        fprintf(stderr, "[countmut] output error: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+        return 0;
+    }
+    if (lua_isstring(L, -1)) {                 /* string -> verbatim row */
+        fputs(lua_tostring(L, -1), fp);
+        fputc('\n', fp);
+    } else if (lua_istable(L, -1)) {           /* array of cells -> TSV row */
+        int first = 1;
+        for (int i = 1;; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (!lua_isnil(L, -1)) {
+                if (!first) fputc('\t', fp);
+                first = 0;
+                if (lua_isnumber(L, -1)) {
+                    lua_Number v = lua_tonumber(L, -1);
+                    if (v == floor(v) && v > -1e15 && v < 1e15)
+                        fprintf(fp, "%.0f", v);
+                    else
+                        fprintf(fp, "%.10g", v);
+                } else {
+                    fputs(lua_tostring(L, -1), fp);   /* nil-safe: "nil" */
+                }
+            }
+            lua_pop(L, 1);
+            if (lua_rawlen(L, -1) < (size_t)i) break;
+        }
+        fputc('\n', fp);
+    } /* nil/false -> omit the site */
+    lua_pop(L, 1);
+    return 1;
 }

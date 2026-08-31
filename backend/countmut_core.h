@@ -15,11 +15,6 @@
 extern "C" {
 #endif
 
-/* Modes */
-#define CM_MODE_MUTATION 0
-#define CM_MODE_BASE     1
-#define CM_MODE_ALLELE   2
-
 /* Engines */
 #define CM_ENGINE_AUTO    0
 #define CM_ENGINE_READWALK 1
@@ -30,16 +25,22 @@ extern "C" {
 #define CM_STRAND_FORWARD 1
 #define CM_STRAND_REVERSE 2
 
+#define CM_OUT_CONVERSION  0  /* output format: u/m conversion view        */
+#define CM_OUT_COMPOSITION 1  /* output format: per-base composition        */
+#define CM_OUT_ALLELE      2  /* output format: ref/alt / VCF               */
+
 typedef struct {
-    int32_t mode;            /* CM_MODE_* */
+    int32_t out;             /* CM_OUT_* (output format) */
     int32_t engine;          /* CM_ENGINE_* */
-    int32_t vcf;             /* allele mode: emit VCF */
-    int     ref_base;        /* 'A'..'T' (mutation) */
+    int32_t vcf;             /* allele output: emit VCF */
+    int     ref_base;        /* 'A'..'T' target base (optional) */
     int     mut_base;
     int     ref_base2;       /* 0 = unset (alternative tagging) */
     int     mut_base2;
     int     pad;             /* motif half-window */
     int     save_rest;       /* emit o0/o1/o2 */
+    const char *output_expr; /* -o output-row template (overrides the built-in format) */
+    const char *fmt_header;  /* header line for a custom output template ("" = none) */
     int     min_mapq;
     int     min_baseq;
     int     max_sub;         /* NS cap, -1 = ignore */

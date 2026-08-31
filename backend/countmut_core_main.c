@@ -68,7 +68,9 @@ static void usage(void) {
         "  --fa FILE             reference FASTA (required)\n"
         "  --out FILE            output (or '-'/omit for stdout)\n"
         "  --region S            chr:start-end region (default: whole file)\n"
-        "  --mode M              mutation | base | allele (default mutation)\n"
+        "  --mode M              conversion | composition | allele  (legacy: mutation | base)\n"
+        "  --output-expr STR      -o output-row template: text + {expr} cells\n"
+        "  --fmt-header STR       header line for a custom -o template\n"
         "  --engine E            read-walk | pileup | auto (default auto)\n"
         "  --vcf                 allele mode: emit VCF\n"
         "  --ref-base C          reference base (mutation)\n"
@@ -89,10 +91,11 @@ static void usage(void) {
         "  --threads N --flanking N\n");
 }
 
-static int mode_from(const char *s) {
-    if (!strcmp(s, "base")) return CM_MODE_BASE;
-    if (!strcmp(s, "allele")) return CM_MODE_ALLELE;
-    return CM_MODE_MUTATION;
+static int fmt_from(const char *s) {
+    /* output-format names + legacy aliases */
+    if (!strcmp(s, "composition") || !strcmp(s, "base")) return CM_OUT_COMPOSITION;
+    if (!strcmp(s, "allele")) return CM_OUT_ALLELE;
+    return CM_OUT_CONVERSION;   /* "conversion" or legacy "mutation" (default) */
 }
 static int engine_from(const char *s) {
     if (!strcmp(s, "read-walk")) return CM_ENGINE_READWALK;
@@ -108,7 +111,7 @@ static int strand_from(const char *s) {
 int main(int argc, char **argv) {
     cm_config cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.mode = CM_MODE_MUTATION;
+    cfg.out = CM_OUT_CONVERSION;
     cfg.engine = CM_ENGINE_AUTO;
     cfg.ref_base = 'A';
     cfg.mut_base = 'G';
@@ -180,6 +183,8 @@ int main(int argc, char **argv) {
         {"mate-fix", no_argument, 0, 1016},
         {"read-expr", required_argument, 0, 2002},
         {"pile-expr", required_argument, 0, 2003},
+        {"output-expr", required_argument, 0, 2004},
+        {"fmt-header", required_argument, 0, 2005},
         {"verbose", no_argument, 0, 'V'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
@@ -190,11 +195,13 @@ int main(int argc, char **argv) {
         case 2000: bam = optarg; break;
         case 2002: cfg.read_expr = optarg; break;
         case 2003: cfg.pile_expr = optarg; break;
+        case 2004: cfg.output_expr = optarg; break;
+        case 2005: cfg.fmt_header = optarg; break;
         case 'V': cfg.verbose = 1; break;
         case 'f': fa = optarg; break;
         case 'o': out = optarg; break;
         case 'r': region = optarg; break;
-        case 'm': cfg.mode = mode_from(optarg); break;
+        case 'm': cfg.out = fmt_from(optarg); break;
         case 'e': cfg.engine = engine_from(optarg); break;
         case 'v': cfg.vcf = 1; break;
         case 'p': cfg.pad = atoi(optarg); break;
@@ -233,11 +240,11 @@ int main(int argc, char **argv) {
     }
     if (!bam || !fa) { usage(); return 1; }
     /* Validate -e / -p Lua expressions up-front (syntax error -> exit 2). */
-    if (!cm_expr_valid(cfg.read_expr, cfg.pile_expr)) return 2;
+    if (!cm_expr_valid(cfg.read_expr, cfg.pile_expr, cfg.output_expr)) return 2;
     /* Engine resolution: auto -> read-walk for mutation (sparse target set),
      * pileup otherwise -- matches the Python engines' auto choice.
      * Both engines are fully implemented in C and emit identical rows. */
     if (cfg.engine == CM_ENGINE_AUTO)
-        cfg.engine = (cfg.mode == CM_MODE_MUTATION) ? CM_ENGINE_READWALK : CM_ENGINE_PILEUP;
+        cfg.engine = (cfg.out == CM_OUT_CONVERSION) ? CM_ENGINE_READWALK : CM_ENGINE_PILEUP;
     return cm_run(&cfg, bam, fa, out, region);
 }

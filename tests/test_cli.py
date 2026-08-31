@@ -33,19 +33,19 @@ class TestCLI:
         assert "0." in result.output  # Just check it has a version
 
     def test_resolve_auto(self):
-        """--mode auto shows the mutation view only when BOTH targets are given."""
+        """--output-format picks conversion only with BOTH targets, else composition."""
         import click
 
-        from countmut.cli import _resolve_auto
+        from countmut.cli import _resolve_format
 
-        assert _resolve_auto("auto", "C", "T") == ("mutation", "C", "T")
-        assert _resolve_auto("auto", None, None) == ("base", None, None)
-        assert _resolve_auto("auto", None, None, vcf=True)[0] == "allele"
-        # explicit mutation mode keeps the historical A/G defaults
-        assert _resolve_auto("mutation", None, None) == ("mutation", "A", "G")
-        assert _resolve_auto("base", "C", "T") == ("base", "C", "T")
+        assert _resolve_format("auto", "C", "T") == ("conversion", "C", "T")
+        assert _resolve_format("auto", None, None) == ("composition", None, None)
+        assert _resolve_format("auto", None, None, vcf=True)[0] == "allele"
+        # legacy names map to the new output formats
+        assert _resolve_format("mutation", None, None) == ("conversion", "A", "G")
+        assert _resolve_format("base", "C", "T") == ("composition", "C", "T")
         with pytest.raises(click.UsageError):
-            _resolve_auto("auto", "C", None)
+            _resolve_format("auto", "C", None)
 
     def test_cli_missing_required_args(self):
         """Test CLI with missing required arguments."""

@@ -6,11 +6,12 @@ that is as a rate. Existing tools made this hard — a flag for every QC idea,
 two BAM-walking strategies that disagreed on deep overlapping sites, and
 read-level filters priced once per aligned position instead of once per read.
 
-CountMut collapses this into one design: QC and trimming are expressions (the
-samtools grammar, in C), the two walks provably agree, and read-level rules
-run once per read. On a deep rRNA transcriptome (784 k reads / 90 Mb) a
-genome-wide `mapq >= 20` adds ~0.5 s, the per-base filter was cut ~3×, and
-the mutation view ends with a `mutation_rate`.
+CountMut collapses this into one design: a single base counter, QC and trimming
+as expressions (the samtools grammar, in C), and two BAM-walks that provably
+agree. What you *see* is just an output format — a named composition / conversion
+/ allele table, or a column template you write yourself. On a deep rRNA
+transcriptome (784 k reads / 90 Mb) a genome-wide `mapq >= 20` adds ~0.5 s,
+and the per-base filter was cut ~3×.
 
 ```bash
 pip install -e .
@@ -19,20 +20,26 @@ pip install -e .
 ## Quick start
 
 ```bash
-# C→T conversion rate at target sites          -> mutation table
-countmut -i in.bam -r ref.fa -o mut.tsv --ref-base C --mut-base T
-
-# every base, per strand                       -> base table
+# every base, per strand                       -> composition view
 countmut -i in.bam -r ref.fa -o depth.tsv
+
+# conversion (C->T) at target sites            -> conversion view + rate
+countmut -i in.bam -r ref.fa -o conv.tsv --ref-base C --mut-base T
+
+# your own columns                            -> custom output template
+countmut -i in.bam -r ref.fa -o mine.tsv --ref-base C --mut-base T \
+  --output-format "{pos+1}\t{ref}\t{a}/{t}\t{round(mutation_rate, 3)}" \
+  --fmt-header "pos\tref\tA/T\trate"
 
 # alleles as VCF                               -> VCF
 countmut -i in.bam -r ref.fa --vcf -o allele.vcf
 ```
 
-There is no `--mode` flag: the output follows what you asked for. Bare runs
-give the per-strand base composition; adding a reference/mutation pair gives
-the conversion view with a `mutation_rate` column; `--vcf` gives an allele
-VCF. Output is per strand by default, and `--strandless` merges the two.
+There is no `--mode` flag — the counting is the same either way; only the
+output format changes. Bare runs print the per-strand base composition;
+adding both `--ref-base`/`--mut-base` turns the same counts into the
+conversion view (with `mutation_rate`); `--vcf` gives an allele VCF. Output
+is per strand by default, and `--strandless` merges the two strands.
 
 ## Filtering with one expression instead of ten flags
 
@@ -72,15 +79,37 @@ The full grammar is in
 [`docs/filter_grammar.md`](docs/filter_grammar.md), with an exhaustive
 reference in [`docs/expression_reference.md`](docs/expression_reference.md).
 
+## Output format
+
+The same per-site counts back every built-in format — `composition`
+(`chrom pos [strand] ref depth a c g t n`), `conversion` (`… motif
+u0 u1 u2 m0 m1 m2 [o0..o2] mutation_rate`, needs `--ref-base`/`--mut-base`),
+and `allele` (ref/alt table or VCF under `--vcf`).
+
+`--output-format` can instead take a **row template**: literal text plus
+`{expr}` placeholders evaluated per site over the site values (`pos`, `ref`,
+`depth`, `a c g t n`, `ins del ref_skip fail`, and — when targets are given —
+`u/m/o` and `mutation_rate`). Placeholders run real Lua, so you can compute
+cells; `round(x, n)` and `int(x)` are helpers for formatting:
+
+```bash
+countmut -i x -r ref -o out --ref-base C --mut-base T \
+  --output-format "{pos+1}\t{ref}\t{a}/({a}+{t})\t{round(mutation_rate, 4)}"
+```
+
+`{{` writes a literal `{`; a placeholder that yields nothing renders as an
+empty cell. `--fmt-header "…"` supplies the header line (`\t`/`\n` are
+expanded); without it custom templates print no header.
+
 ## Engines and options
 
 Two BAM-walking strategies live in the C core. `--engine auto` (default) uses
-the read walk for the targeted mutation view and the pileup walk otherwise;
+the read walk for the targeted conversion view and the pileup walk otherwise;
 both produce identical output, so the choice only affects speed. The remaining
 options are few: input/reference/output, `--region`, `--threads/-t`,
 `--engine`, `--ref-base`, `--mut-base`, `--pad`, `--save-rest`,
 `--strandless`, `--count-indels`, `--vcf` (+ `--min-depth`,
-`--min-allele-support`), and `-e`/`-p`.
+`--min-allele-support`), `-e`/`-p`, and `--output-format`/`--fmt-header`.
 
 ## Input formats
 

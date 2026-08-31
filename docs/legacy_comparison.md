@@ -59,6 +59,6 @@ mimicking bwa output.
 
 ```
 count_mutations(...)             # legacy: writes legacy.tsv
-countmut_core --bam test.bam --fa ref.fa --mode mutation \
+countmut_core --bam test.bam --fa ref.fa --mode conversion \
   --engine read-walk --ref-base C --mut-base T --pad 15 ...   # new (C core)
 ```

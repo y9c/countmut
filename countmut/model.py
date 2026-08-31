@@ -73,6 +73,8 @@ class EngineConfig:
     # Lua filter expressions (evaluated inside the C core, pbr-style)
     read_expr: str | None = None  # -e read-level filter (per aligned base)
     pile_expr: str | None = None  # -p site-level filter (per site)
+    output_expr: str | None = None  # -o output-row template (overrides built-in format)
+    fmt_header: str | None = None  # header line for a custom output template
     # allele / output
     vcf: bool = False  # allele mode: emit VCF
     count_indels: bool = False

@@ -602,3 +602,33 @@ def test_sam_input_matches_bam(motif_data, tmp_path):
         samgz, fa, mode="mutation", engine="pileup", region="chr1:1-8", extra=args
     )
     assert from_bam == from_samgz, "gzipped SAM input diverged from BAM"
+
+
+def test_output_format_template(motif_data):
+    """--output-format as a row template: header via --fmt-header (\\t expanded),
+    cells computed from the site namespace (incl. derived u/m/mutation_rate)."""
+    bam, fa = motif_data
+    tpl = "{pos+1}\t{ref}\t{a}/({a}+{t})\t{round(mutation_rate, 3)}"
+    header, rows = run_c(
+        bam,
+        fa,
+        mode="conversion",
+        engine="pileup",
+        region="chr1:1-8",
+        extra=[
+            "--ref-base",
+            "C",
+            "--mut-base",
+            "T",
+            "--pad",
+            "1",
+            "--output-expr",
+            tpl,
+            "--fmt-header",
+            "pos\tref\tat_slash_t\trate",
+        ],
+    )
+    assert header == ["pos", "ref", "at_slash_t", "rate"], header
+    assert rows and all(len(r) == 4 for r in rows), rows[:2]
+    r0 = rows[0]
+    assert int(r0[0]) >= 1 and r0[1] in "ACGTN"

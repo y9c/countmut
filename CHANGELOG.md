@@ -8,12 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **"mutation"/"base" are no longer modes; the emitter is variable.**  There is
+  one counting core; `--mode` is gone and the internal format names are now
+  `conversion` / `composition` / `allele` (the raw `countmut_core` still accepts
+  `mutation`/`base` as aliases for tests/scripts).  The output is decided by
+  what you give it: both `--ref-base`/`--mut-base` → conversion view, else
+  composition, `--vcf` → allele; or `--output-format` picks it explicitly.
+- **`--output-format` can be a row template expression** (e.g.
+  `"{pos+1}\t{ref}\t{a}/({a}+{t})\t{round(mutation_rate, 4)}"`): literal text
+  plus `{expr}` placeholders over the site values (`pos ref depth a c g t n
+  ins del ref_skip fail` and, with targets, `u/m/o` + `mutation_rate`),
+  evaluated per site in the C core.  Helpers `round(x, n)` and `int(x)` added;
+  any Lua works inside `{}`.  `--fmt-header` supplies the custom header
+  (`\t`/`\n` expanded).
 - **`--mode` flag removed.**  There is one counting core; the output view is
   inferred from the inputs: `--vcf` → allele, both `--ref-base`/`--mut-base` →
-  mutation view (with `mutation_rate`), otherwise base.  Giving exactly one
-  target is an error.  (`--mode` remains only as an internal backend/test
+  conversion view (with `mutation_rate`), otherwise composition.  Giving exactly
+  one target is an error.  (`--mode` remains only as an internal backend/test
   contract on the raw `countmut_core` binary.)
-- **`mutation_rate` column** in the mutation view: `m/(u+m)` across all tiers
+- **`mutation_rate` column** in the conversion view: `m/(u+m)` across all tiers
   (`nan` when there are no informative reads), appended after `m2` (`o0..o2`),
   so the conversion rate is shown directly instead of only the raw `u`/`m`.
   `get_output_headers()` updated to match (11 / 14 columns).

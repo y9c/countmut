@@ -69,38 +69,44 @@ click.rich_click.OPTION_GROUPS = {
 console = Console()
 
 
-def _resolve_auto(
-    mode: str,
+_NAMED_FORMATS = ("auto", "conversion", "composition", "allele", "mutation", "base")
+_LEGACY = {"mutation": "conversion", "base": "composition"}
+
+
+def _resolve_format(
+    output_format: str,
     ref_base: str | None,
     mut_base: str | None,
     vcf: bool = False,
 ) -> tuple[str, str | None, str | None]:
-    """Resolve the counting view from the inputs (there is no `--mode` flag):
+    """Choose the output format (the counting is one; `--mode` is gone).
 
-    - ``vcf`` set                      -> allele view (VCF)
-    - both `--ref-base` / `--mut-base` -> mutation view (mutation_rate)
-    - exactly one target               -> error (ambiguous)
-    - neither (no vcf)                 -> base view (full base composition)
+    - named `conversion`/`composition`/`allele` (legacy `mutation`/`base`): that
+      built-in emit;
+    - `auto` (or a row template): from the inputs -- both `--ref-base` /
+      `--mut-base` -> conversion (with mutation_rate / motif), else
+      composition; `--vcf` -> allele.
 
-    Returns the resolved (mode, ref_base, mut_base).  Mutation mode applies the
-    historical A/G defaults when the targets are omitted.
+    Returns (format, ref_base, mut_base); the conversion format applies the
+    historical A/G defaults when targets are omitted.
     """
-    if mode == "auto":
+    fmt = _LEGACY.get(output_format, output_format)
+    if fmt == "auto":
         if vcf:
-            mode = "allele"
+            fmt = "allele"
         elif ref_base and mut_base:
-            mode = "mutation"
+            fmt = "conversion"
         elif ref_base or mut_base:
             raise click.UsageError(
-                "--mode auto needs BOTH --ref-base and --mut-base (mutation view) "
-                "or neither (base view)"
+                "give BOTH --ref-base and --mut-base for the conversion view, "
+                "or neither for the composition view"
             )
         else:
-            mode = "base"
-    if mode == "mutation":
+            fmt = "composition"
+    if fmt == "conversion":
         ref_base = ref_base or "A"
         mut_base = mut_base or "G"
-    return mode, ref_base, mut_base
+    return fmt, ref_base, mut_base
 
 
 @click.command(
@@ -198,6 +204,23 @@ def _resolve_auto(
     help="Lua site filter (e.g. \"ref == 'A' and depth >= 5 and g > 2\")",
 )
 @click.option(
+    "--output-format",
+    "output_format",
+    default="auto",
+    show_default=True,
+    help=(
+        "Named output format (auto|conversion|composition|allele; legacy "
+        "mutation|base) OR a row template: literal text plus {expr} placeholders "
+        'over the site values, e.g. "{pos+1}\\t{ref}\\t{a}/({a}+{t})" '
+        "(helpers: round(), int(), …).  For a template, add --fmt-header."
+    ),
+)
+@click.option(
+    "--fmt-header",
+    default=None,
+    help="Header line for a custom --output-format template (default: none)",
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -220,13 +243,19 @@ def main(
     vcf,
     read_expr,
     pile_expr,
+    output_format,
+    fmt_header,
     verbose,
 ):
     """[bold green]countmut: unified ultra-fast strand-aware counter[/bold green]."""
-    # No --mode flag: the view is inferred from the inputs (vcf -> allele,
-    # both targets -> mutation, else base) and resolved to a concrete mode
-    # for the backend and the info panel below.
-    mode, ref_base, mut_base = _resolve_auto("auto", ref_base, mut_base, vcf)
+    # No --mode flag: one counting core, and the output is either a named format
+    # or a row template expression (-o/--output-format).  A named format or a
+    # template still resolves a counting format by the targets for the site gate.
+    output_expr = None
+    if output_format not in _NAMED_FORMATS:
+        output_expr = output_format  # a row template, not a named format
+        output_format = "auto"
+    mode, ref_base, mut_base = _resolve_format(output_format, ref_base, mut_base, vcf)
     # Panels/logs go to stderr so stdout stays pure data.
     console = Console(stderr=True)
 
@@ -253,6 +282,8 @@ def main(
         vcf=vcf,
         read_expr=read_expr,
         pile_expr=pile_expr,
+        output_expr=output_expr,
+        fmt_header=fmt_header,
         verbose=verbose,
     )
 
