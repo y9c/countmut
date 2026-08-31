@@ -73,9 +73,12 @@ def main():
                 if start < 0 or start + args.read_len > len(seq):
                     continue
                 qseq = seq[start : start + args.read_len]
-                if flag & 16:
-                    # store reverse reads reference-forward (BAM convention)
-                    qseq = qseq[::-1].translate(str.maketrans("ACGT", "TGCA"))
+                # BAM stores SEQ reference-forward: for a (reverse-strand) read
+                # the stored sequence is the reference span itself, with SEQ[0]
+                # at the leftmost reference position (NOT the observed molecule;
+                # flag bits 16 alone carry the strand).  Reverse-complementing
+                # here would store the molecule form and make every reverse-read
+                # base disagree with the reference.
                 r = pysam.AlignedSegment(hdr)
                 r.query_name = f"{name}_{f}_{1 if is_read1 else 2}"
                 r.flag = flag

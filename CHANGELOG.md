@@ -94,6 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference means no separate FASTA is needed for that conversion).
 
 ### Fixed
+- **`tests/make_bench_bam.py` stored reverse reads in the molecule form.**  A
+  BAM's SEQ field is the *reference-forward* representation (for a reverse-strand
+  read, `SEQ[0]` sits at the leftmost reference position and equals the
+  reference base there, per the SAM spec: stored SEQ = revcomp of the observed
+  molecule, which for a minus-strand read is the reference span itself).  The
+  generator reverse-complemented the span anyway (contradicting its own
+  comment), so every reverse-read base in the synthetic fixtures disagreed with
+  the reference.  Removed the revcomp; fixtures now match what bwa/STAR produce.
+  countmut's base extraction (`stored[qpos]`, same convention as
+  samtools mpileup) was already correct: re-verified against
+  **`samtools mpileup` base-for-base** (0 mismatches on 870 positions across a
+  deep and a shallow contig, both engines), plus rw == pileup byte-identical on
+  both regenerated benches (~6 M rows), t1 == t16 determinism, fragment-overlap
+  dedup == distinct-qname coverage, base-vs-reference sanity (0 non-reference
+  counts across 3 M rows), a reverse-strand specprobe that equals mpileup, the
+  scenario matrix, 48/48 tests, and an ASan+UBSan pass.
 - **read-walk dedup-hash was O(n^2) at depth (root cause of the slowness).**
   Klib's `kh_int64_hash_func` has weak low bits, and our
   `(pos, qname-id)` and position keys have near-monotonic low bits as reads are
