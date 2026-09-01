@@ -23,21 +23,25 @@ from pathlib import Path
 from .model import EngineConfig, FilterConfig, StrandConfig
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
+# Binary shipped inside the installed package (bundled in the wheel).
+SHIPPED_BINARY = _PACKAGE_DIR / "_core" / "countmut_core"
+# Binary built from the source checkout (dev / `pip install -e .`).
 BACKEND_DIR = _PACKAGE_DIR.parent / "backend"
-BINARY = BACKEND_DIR / "countmut_core"
+SRC_BINARY = BACKEND_DIR / "countmut_core"
 
 
 # ---------------------------------------------------------------------------
 # locating / building the binary
 # ---------------------------------------------------------------------------
 def find_binary() -> Path | None:
-    if BINARY.exists():
-        return BINARY
+    for candidate in (SHIPPED_BINARY, SRC_BINARY):
+        if candidate.exists():
+            return candidate
     return None
 
 
 def build_binary() -> Path | None:
-    """Compile the backend with `make`; return the binary path or None."""
+    """Compile the backend with `make` (source checkout); return the binary or None."""
     if not (BACKEND_DIR / "Makefile").exists():
         return None
     try:
@@ -51,7 +55,7 @@ def build_binary() -> Path | None:
     except subprocess.CalledProcessError as exc:
         sys.stderr.write(f"[countmut] backend build failed: {exc.stderr.decode()}\n")
         return None
-    return BINARY if BINARY.exists() else None
+    return SRC_BINARY if SRC_BINARY.exists() else None
 
 
 def ensure_backend() -> Path | None:

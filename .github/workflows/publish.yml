@@ -1,5 +1,9 @@
-# This workflow will upload a Python Package using Twine when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+# Builds and publishes countmut to PyPI on every version bump (pyproject.toml)
+# on main, or on a published GitHub release.
+#
+# The C core (backend/countmut_core) is compiled here and bundled into the
+# wheel at countmut/_core/countmut_core, so `uv tool install countmut` / pip
+# installs work out of the box.
 
 name: Upload Python Package
 
@@ -28,10 +32,18 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential liblua5.4-dev zlib1g-dev
           python -m pip install --upgrade pip
           pip install build twine
+
+      - name: Build the C core and bundle it into the package
+        run: |
+          make -C backend
+          mkdir -p countmut/_core
+          cp backend/countmut_core countmut/_core/countmut_core
 
       - name: Build package
         run: python -m build
@@ -45,4 +57,3 @@ jobs:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-

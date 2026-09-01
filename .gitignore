@@ -232,3 +232,5 @@ examples/*.fai
 backend/*.o
 backend/countmut_core
 backend/countmut_core.so
+# bundled binary placed into the package before building the wheel
+countmut/_core/
