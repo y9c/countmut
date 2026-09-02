@@ -590,7 +590,11 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             const bam1_t *b = p->b;
             int s = bio_strand(b);
             uint8_t nt = bam_seqi(bam_get_seq(b), p->qpos);
-            int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
+            int base_i = nt16_index(nt);
+            /* Minus reads: stored SEQ is 5'->3' (SAM spec) but qpos walks
+             * CIGAR order (left->right); complement the base into the
+             * reference frame (parity with countmut 0.0.x + pysam pairs). */
+            if (s == 1 && base_i < 4) base_i = 3 - base_i;
             int qual = (int)bam_get_qual(b)[p->qpos];
             if (cfg->out == CM_OUT_CONVERSION) {
                 site.cnt[s][(qual >= cfg->min_baseq) ? 2 : 0][base_i]++;
@@ -770,7 +774,11 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
                          (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N'))
         return wins;
     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
-    int base_i = nt16_index(nt);   /* stored SEQ is reference-forward */
+    int base_i = nt16_index(nt);
+    /* Minus reads: stored SEQ is 5'->3' (SAM spec) but qpos walks CIGAR order
+     * (left->right); complement the base into the reference frame (parity
+     * with countmut 0.0.x + pysam pairs). */
+    if (s == 1 && base_i < 4) base_i = 3 - base_i;
     int qual = (int)bam_get_qual(b)[qpos];
     if (direct) {
         int cat = (cfg->out == CM_OUT_CONVERSION)

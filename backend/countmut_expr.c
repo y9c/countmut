@@ -722,7 +722,20 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
     }
     if (x->need_seq || x->need_base) {
         seq = read_seq_str(b, strbuf, (size_t)lq + 1);
-        if (x->need_base && qpos >= 0 && (size_t)qpos < (size_t)lq) basec[0] = seq[qpos];
+        if (x->need_base && qpos >= 0 && (size_t)qpos < (size_t)lq) {
+            basec[0] = seq[qpos];
+            /* Minus reads: report the reference-frame base (same convention
+             * as the counting core: complement of the CIGAR-order stored base). */
+            if (strand_sign < 0) {
+                switch (basec[0]) {
+                case 'A': basec[0] = 'T'; break;
+                case 'T': basec[0] = 'A'; break;
+                case 'C': basec[0] = 'G'; break;
+                case 'G': basec[0] = 'C'; break;
+                default: break; /* N/?/unknown stay as-is */
+                }
+            }
+        }
     }
     char refc[2] = { ref_base ? ref_base : 'N', 0 };
 

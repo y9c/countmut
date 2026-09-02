@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-02
+
+### Fixed
+- **Minus-strand bases are now reported in the reference frame.**  Both
+  engines (read-walk and mini-pileup) read `bam_seqi(seq, qpos)` with no
+  complement for minus reads.  The stored SEQ is 5'->3' (SAM spec) while
+  `qpos` walks CIGAR order (left->right), so minus-strand sites were
+  previously reported as raw stored bases.  The counting core and the `-e`
+  `base` variable now complement A<->T / C<->G for minus reads, matching the
+  countmut 0.0.x convention (pysam `get_aligned_pairs` + complement), so
+  per-strand counts are comparable across versions.
+
 ## [0.2.0] - 2026-09-01
 
 ### Changed
