@@ -29,7 +29,7 @@ from .model import EngineConfig, FilterConfig, StrandConfig
 try:
     __version__ = importlib_metadata.version("countmut")
 except importlib_metadata.PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.2.1"
+    __version__ = "0.2.2"
 
 click.rich_click.TEXT_MARKUP = "rich"
 click.rich_click.SHOW_ARGUMENTS = True
@@ -50,6 +50,7 @@ click.rich_click.OPTION_GROUPS = {
             "name": "Base/Allele / Output Options",
             "options": [
                 "--output-format",
+                "--motif-pad",
                 "--strandless",
                 "--count-indels",
                 "--max-depth",
@@ -160,6 +161,18 @@ console = Console()
     help="Header line for a custom --output-format template (default: none)",
 )
 @click.option(
+    "--motif-pad",
+    "motif_pad",
+    type=int,
+    default=None,
+    show_default=True,
+    help=(
+        "Reference window for the {motif} template cell: 2*N+1 bases centered "
+        "on the site (minus-strand rows get the reverse complement). "
+        "0 (default) = the reference base only."
+    ),
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -180,6 +193,7 @@ def main(
     pile_expr,
     output_format,
     fmt_header,
+    motif_pad,
     verbose,
 ):
     """[bold green]countmut: one counter, output format is yours[/bold green]."""
@@ -205,6 +219,7 @@ def main(
         pile_expr=pile_expr,
         output_expr=output_expr,
         fmt_header=fmt_header,
+        motif_pad=motif_pad,
         verbose=verbose,
     )
 

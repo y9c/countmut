@@ -9,6 +9,7 @@
 #define COUNTMUT_EXPR_H
 
 #include "sam.h"
+#include "countmut_core.h"  /* CM_CAT_MAX for the per-category count matrix */
 
 typedef struct cm_expr cm_expr;
 
@@ -47,21 +48,35 @@ int cm_expr_has_output(const cm_expr *x);
 int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
                  int qpos, int strand_sign, char ref_base);
 
-/* Evaluate the -p filter for one site.  cnt[5] = A/C/G/T/N totals across all
- * strands and quality tiers; ins/del/rs/fl are the indel/ref-skip/fail counts;
- * motif is the reference window string (may be NULL/empty outside mutation
- * mode); refi/muti are base_to_index() of the ref/mut targets (-1 if unset).
- * Returns 1 = keep the site, 0 = omit it. */
-int cm_expr_pile(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
-                 const int cnt[5], int ins, int del, int rs, int fl,
-                 int refi, int muti);
+/* Evaluate the -e expression as a ROUTER: it returns a category slot instead
+ * of a plain keep/drop.  Return -1 = drop the base; 0..CM_CAT_MAX-1 = the
+ * per-site category slot to count the base into (site_t.cnt[strand][slot]).
+ * Value mapping: nil/false -> -1 (drop), true -> 0 (default slot, so a plain
+ * boolean filter keeps behaving as before), an integer 0..CM_CAT_MAX-1 ->
+ * that slot, and anything else (or out-of-range) -> -1 (drop).  Runtime errors
+ * are treated as a drop (never propagate) to match cm_expr_read(). */
+int cm_expr_route(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
+                  int qpos, int strand_sign, char ref_base);
+
+/* Evaluate the -p filter for one site.  `chrom` is the contig name; cnt[5] =
+ * A/C/G/T/N totals across all strands and category slots; ins/del/rs/fl are
+ * the indel/ref-skip/fail counts; motif is the reference window string (may be
+ * NULL/empty); refi/muti are base_to_index() of the ref/mut targets (-1 if
+ * unset).  Returns 1 = keep the site, 0 = omit it. */
+int cm_expr_pile(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                 const char *motif, const int cnt[5], int ins, int del, int rs,
+                 int fl, int refi, int muti);
 
 /* Evaluate the output-row template for one emitted strand (strand_s: 0 = '+',
- * 1 = '-') of a site and write the resulting line to `fp`.  A returned Lua
+ * 1 = '-') of a site and write the resulting line to `fp`.  `chrom` is the
+ * contig name; `pos` is 0-based; `cnt[CM_CAT_MAX][5]` is the per-category,
+ * per-base count matrix for *this strand* (cnt[][0]=A,1=C,2=G,3=T,4=N);
+ * ins/del/rs/fl are this strand's indel/ref-skip/fail counts.  A returned Lua
  * string is printed verbatim + '\n'; a table is tab-joined into a row; nil or
  * false emits nothing. */
-int cm_expr_output(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
-                   const int cnt[5], int ins, int del, int rs, int fl,
+int cm_expr_output(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                   const char *motif, const int cnt[CM_CAT_MAX][5],
+                   int ins, int del, int rs, int fl,
                    int refi, int muti, int strand_s, FILE *fp);
 
 #endif /* COUNTMUT_EXPR_H */

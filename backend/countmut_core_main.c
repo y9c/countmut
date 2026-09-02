@@ -77,6 +77,7 @@ static void usage(void) {
         "  --trim-r1-end N --trim-r2-start N               read R1 3'-end / R2 5'-start trim\n"
         "  --min-allele-support N --min-allele-frac F --min-strand-support N\n"
         "  --min-depth N --mean-depth N\n"
+        "  --motif-pad N         {motif} reference window: 2*N+1 bases (0 = the base only)\n"
         "  --count-indels [--strandless]\n"
         "  --strand S            both | forward | reverse\n"
         "  --read-expr EXPR       -e Lua read filter (evaluated per base)\n"
@@ -121,6 +122,7 @@ int main(int argc, char **argv) {
     cfg.max_depth = 0;       /* 0 = unlimited (count all reads) */
     cfg.threads = 1;
     cfg.flanking = 0;
+    cfg.pad = 0;              /* {motif} window: 2*pad+1 ref bases (0 = the base only) */
     cfg.req_flags = 0;
     cfg.excl_flags = 1796; /* samtools default: UNMAP|SECONDARY|QCFAIL|DUP */
     cfg.bedfile = NULL;
@@ -161,6 +163,7 @@ int main(int argc, char **argv) {
         {"ff", required_argument, 0, 1101},
         {"input-fmt-option", required_argument, 0, 1102},
         {"mate-fix", no_argument, 0, 1016},
+        {"motif-pad", required_argument, 0, 1019},
         {"read-expr", required_argument, 0, 2002},
         {"pile-expr", required_argument, 0, 2003},
         {"output-expr", required_argument, 0, 2004},
@@ -209,6 +212,7 @@ int main(int argc, char **argv) {
         case 1013: cfg.strandless = 1; break;
         case 1014: cfg.max_depth = atoi(optarg); break;
         case 1015: cfg.flanking = atoi(optarg); break;
+        case 1019: cfg.pad = atoi(optarg); break;
         default: usage(); return 1;
         }
     }

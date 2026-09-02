@@ -20,6 +20,23 @@ extern "C" {
 #define CM_ENGINE_READWALK 1
 #define CM_ENGINE_PILEUP   2
 
+/* -e read-expression status categories.  Slot 0 is the DEFAULT category
+ * (used when no -e filter is set, or the filter returns true); slots 1..K
+ * are the user-declared --status names (in declaration order).  site_t keeps
+ * one [strand][category][base] count matrix, so the -p / output expressions
+ * can split the per-site counts by category (e.g. legacy u0/u1/u2 columns).
+ * Bumped from 3 -> 4 to fit the default + the three legacy tiers
+ * (low quality / high conversion / insufficient conversion). */
+#define CM_CAT_MAX 4
+#define CM_CAT_NAME_MAX 16
+
+/* per-site accumulator: counts per biological strand, per -e status
+ * category, per base (0=A,1=C,2=G,3=T,4=N) */
+typedef struct {
+    int cnt[2][CM_CAT_MAX][5]; /* [strand][category][base] */
+    int ins[2], del[2], refskip[2], fail[2];
+} site_t;
+
 /* Strand processing */
 #define CM_STRAND_BOTH    0
 #define CM_STRAND_FORWARD 1
@@ -37,7 +54,7 @@ typedef struct {
     int     mut_base;
     int     ref_base2;       /* legacy/unused: always 0 */
     int     mut_base2;
-    int     pad;             /* legacy/unused */
+    int     pad;             /* {motif} reference window: 2*pad+1 bases (--motif-pad) */
     int     save_rest;       /* legacy/unused */
     const char *output_expr; /* -o output-row template (overrides the built-in format) */
     const char *fmt_header;  /* header line for a custom output template ("" = none) */

@@ -107,6 +107,8 @@ def _build_cmd(
         cmd += ["--output-expr", ecfg.output_expr]
     if ecfg.fmt_header:
         cmd += ["--fmt-header", ecfg.fmt_header]
+    if ecfg.motif_pad:
+        cmd += ["--motif-pad", str(ecfg.motif_pad)]
     if ecfg.region:
         cmd += ["--region", ecfg.region]
     if ecfg.vcf:

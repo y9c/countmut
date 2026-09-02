@@ -3,12 +3,24 @@
 Reference notes for `-e`/`-p` filter expressions.  For a quick guide see
 [`filter_grammar.md`](filter_grammar.md); this is the complete spec.
 
-- `-e, --expression <STR>` — **read** filter, per aligned base (or once per
-  read, see *Read-constant* below).
+- `-e, --expression <STR>` — **read** filter **and group router**, per aligned
+  base (or once per read, see *Read-constant* below).
 - `-p, --pile-expression <STR>` — **site** filter, once per reported site.
 
-False/`nil` excludes that base/read/site.  A **syntax error is fatal (exit
-code 2)**; a runtime error just rejects that item.
+Return-value semantics:
+
+| `-e` returns          | effect                                             |
+|-----------------------|----------------------------------------------------|
+| `nil` / `false`       | base dropped (the old filter behavior)             |
+| `true`                | base counted into **group 0** (old filter behavior)|
+| integer `0` … `3`     | base counted into that group                       |
+| anything else         | base dropped + warning on stderr                   |
+
+Groups surface in `--output-format` templates as per-group cells `{a.0}` …
+`{n.3}` (e.g. a 2-group A→G view: `{a.0}\t{a.1}\t{g.0}\t{g.1}`); the plain
+`{a}` … `{n}` cells stay the per-strand total over all groups.  The `-p` site
+filter stays a plain boolean predicate.  A **syntax error is fatal (exit code
+2)**; a runtime error just rejects that item.
 
 ## Language
 
@@ -123,6 +135,10 @@ exists('NM') ~= true or tag('NM') <= 3   # ...or tolerate absence
 `a c g t n` (= `A C G T N`), `ins`, `del`, `ref_skip`, `fail`; in the mutation
 view the reference window is also exposed as `motif`.
 
+When `-e` routes bases into groups, the pile-level `a c g t n` are the totals
+over **all groups** (both strands); per-group cells (`a.0` … `n.3`) are only
+available in `-o` row templates, where they are per-strand.
+
 ## Performance
 
 Two cost classes decide how fast a filter is:
@@ -168,6 +184,15 @@ countmut -i x.bam -r ref.fa -e "rname =~ 'rRNA.*'"
 
 # A-reference sites with depth >= 5 and > 2 G alleles
 countmut -i x.bam -r ref.fa -p "ref == 'A' and depth >= 5 and g > 2"
+
+# group router: bisulfite A->G, 2 groups (g1 = high-conversion bases,
+# g0 = low-quality / read-end bases that pass the hard NS gate); per-strand
+# 2-group view via the template
+countmut -i x.bam -r ref.fa \
+  -e "([NS] <= 1) and (([Yf] >= 1 and [Zf] <= 3 and bq >= 20 and qpos >= 2 and qlen - qpos > 2) and 1 or 0)" \
+  --motif-pad 15 \
+  --fmt-header "chrom\tpos\tstrand\tmotif\tu0\tu1\tm0\tm1" \
+  --output-format "{chrom}\t{pos+1}\t{strand}\t{motif}\t{a.0}\t{a.1}\t{g.0}\t{g.1}"
 ```
 
 Both engines apply the filters identically and emit byte-identical output with

@@ -74,6 +74,7 @@ class EngineConfig:
     pile_expr: str | None = None  # -p site-level filter (per site)
     output_expr: str | None = None  # -o output-row template (overrides built-in format)
     fmt_header: str | None = None  # header line for a custom output template
+    motif_pad: int | None = None  # {motif} window: 2*N+1 ref bases (None = C default 0)
     # allele / output
     vcf: bool = False  # allele mode: emit VCF
     count_indels: bool = False

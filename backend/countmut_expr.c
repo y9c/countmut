@@ -538,7 +538,29 @@ static char *build_output_chunk(const char *tpl) {
             if (e >= n) { free(out); return NULL; }        /* unbalanced '{' */
             if (!first) { out[j++] = '.'; out[j++] = '.'; }
             memcpy(out + j, "tostring((", 10); j += 10;
-            memcpy(out + j, tpl + i + 1, e - i - 1); j += e - i - 1;
+            {
+                /* Copy the placeholder body, rewriting per-group base refs
+                 * `x.N` (x = a/c/g/t/n, N = 0..3) into the flat per-group
+                 * globals `xN` (e.g. a.1 -> a1).  The conversion only
+                 * shrinks the string, so it is safe in place. */
+                size_t clen = e - i - 1;
+                memcpy(out + j, tpl + i + 1, clen);
+                size_t k = j;
+                for (size_t m = j; m < j + clen; ++m) {
+                    char c = out[m];
+                    if ((c == 'a' || c == 'A' || c == 'c' || c == 'C' || c == 'g' ||
+                         c == 'G' || c == 't' || c == 'T' || c == 'n' || c == 'N')
+                        && m + 2 < j + clen && out[m + 1] == '.'
+                        && out[m + 2] >= '0' && out[m + 2] <= '3') {
+                        out[k++] = (char)tolower((unsigned char)c);
+                        out[k++] = out[m + 2];
+                        m += 2;
+                    } else {
+                        out[k++] = c;
+                    }
+                }
+                j = k;
+            }
             memcpy(out + j, ") or '')", 8); j += 8;
             first = 0;
             i = e + 1;
@@ -687,9 +709,13 @@ int cm_expr_read_constant(const cm_expr *x) {
         && !x->need_qpos && !x->need_bq && !x->need_base && !x->need_ref && !x->need_dist;
 }
 
-int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
-                 int qpos, int strand_sign, char ref_base) {
-    if (x == NULL || x->read_ref == LUA_NOREF) return 1;
+/* Set the read-namespace globals for one aligned base of `b`.  Frames the
+ * call (all the r_int/r_str above); the caller then runs the compiled chunk
+ * and interprets its return value (cm_expr_read: keep/drop; cm_expr_route:
+ * category slot).  `x` is non-NULL with read_ref != LUA_NOREF when called. */
+static void expr_frame(cm_expr *x, const bam1_t *b, const char *rname,
+                       const char *mrname, int qpos, int strand_sign,
+                       char ref_base) {
     lua_State *L = x->L;
 
     if (x->need_aux) {  /* only tag()/exists()/n5()/n3() read the current record */
@@ -813,20 +839,61 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
     }
 
     if (strbuf && (size_t)lq + 1 > (1u << 20)) free(strbuf);  /* heap fallback */
-    return run_chunk(L, x->read_ref);
+}
+
+int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
+                 int qpos, int strand_sign, char ref_base) {
+    if (x == NULL || x->read_ref == LUA_NOREF) return 1;
+    expr_frame(x, b, rname, mrname, qpos, strand_sign, ref_base);
+    return run_chunk(x->L, x->read_ref);
+}
+
+/* Route one aligned base to a per-site category slot.  -1 = drop; 0..3 = slot. */
+int cm_expr_route(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
+                  int qpos, int strand_sign, char ref_base) {
+    if (x == NULL || x->read_ref == LUA_NOREF) return 0;   /* no -e -> default slot 0 */
+    lua_State *L = x->L;
+    expr_frame(x, b, rname, mrname, qpos, strand_sign, ref_base);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, x->read_ref);
+    if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        fprintf(stderr, "[countmut] expression error: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+        return -1;                       /* drop on error, never propagate */
+    }
+    int slot;
+    if (lua_isnil(L, -1)) slot = -1;
+    else if (lua_type(L, -1) == LUA_TBOOLEAN)
+        slot = lua_toboolean(L, -1) ? 0 : -1;
+    else if (lua_isnumber(L, -1)) {
+        int n = (int)lua_tointeger(L, -1);
+        slot = (n >= 0 && n < CM_CAT_MAX) ? n : -1;
+    } else
+        slot = -1;
+    lua_pop(L, 1);
+    return slot;
 }
 
 /* Populate the per-site pile namespace (flat globals + pile.* table) used by
- * both -p and the -o output template.  cnt[5] are A/C/G/T/N totals (all tiers
- * and strands), refi/muti are base_to_index() of the ref/mut targets (-1 if
- * unset) -- when both are valid the derived conversion fields u/m/o and
- * mutation_rate become available; strand_s (0/1) marks the emitted strand
- * ('+'/'-') or -1 for the site-level (-p) evaluation. */
-static void pile_set_all(lua_State *L, cm_expr *x, int64_t pos, char ref_ch,
-                         const char *motif, const int cnt[5], int ins, int del,
+ * both -p and the -o output template.  `cnt` is [CM_CAT_MAX][5] (category x
+ * base) for the evaluated scope: per-strand when emitting a template row, the
+ * whole site for -p.  The plain letters a/c/g/t/n are totals across all
+ * categories; the per-category counts are exposed as a0..a3, c0..c3, g0..g3,
+ * t0..t3, n0..n3 (template refs `a.1` etc. are rewritten to these names by
+ * build_output_chunk).  `chrom` is the contig name ("" when unknown).
+ * refi/muti are base_to_index() of the ref/mut targets (-1 if unset) -- when
+ * both are valid the derived conversion fields u/m/o and mutation_rate become
+ * available; strand_s (0/1) marks the emitted strand ('+'/'-') or -1 for the
+ * site-level (-p) evaluation. */
+static void pile_set_all(lua_State *L, cm_expr *x, const char *chrom, int64_t pos,
+                         char ref_ch, const char *motif,
+                         const int cnt[CM_CAT_MAX][5], int ins, int del,
                          int rs, int fl, int refi, int muti, int strand_s) {
+    static const char base_letters[5] = { 'a', 'c', 'g', 't', 'n' };
+    int tot[5] = {0};
     int depth = 0;
-    for (int i = 0; i < 5; ++i) depth += cnt[i];
+    for (int c = 0; c < CM_CAT_MAX; ++c)
+        for (int b = 0; b < 5; ++b) tot[b] += cnt[c][b];
+    for (int b = 0; b < 5; ++b) depth += tot[b];
     char refstr[2] = { ref_ch ? ref_ch : 'N', 0 };
     const char *mot = motif ? motif : "";
 
@@ -837,16 +904,24 @@ static void pile_set_all(lua_State *L, cm_expr *x, int64_t pos, char ref_ch,
     p_str(x, "REF", refstr);
     p_int(x, "depth", depth);
     p_int(x, "DEPTH", depth);
-    p_int(x, "a", cnt[0]);
-    p_int(x, "c", cnt[1]);
-    p_int(x, "g", cnt[2]);
-    p_int(x, "t", cnt[3]);
-    p_int(x, "n", cnt[4]);
-    p_int(x, "A", cnt[0]);
-    p_int(x, "C", cnt[1]);
-    p_int(x, "G", cnt[2]);
-    p_int(x, "T", cnt[3]);
-    p_int(x, "N", cnt[4]);
+    p_str(x, "chrom", chrom ? chrom : "");
+    p_int(x, "a", tot[0]);
+    p_int(x, "c", tot[1]);
+    p_int(x, "g", tot[2]);
+    p_int(x, "t", tot[3]);
+    p_int(x, "n", tot[4]);
+    p_int(x, "A", tot[0]);
+    p_int(x, "C", tot[1]);
+    p_int(x, "G", tot[2]);
+    p_int(x, "T", tot[3]);
+    p_int(x, "N", tot[4]);
+    /* per-category counts for the `base.N` template refs (a0..a3, c0..c3, ...) */
+    for (int b = 0; b < 5; ++b)
+        for (int c = 0; c < CM_CAT_MAX; ++c) {
+            char nm[3];
+            nm[0] = base_letters[b]; nm[1] = (char)('0' + c); nm[2] = 0;
+            p_int(x, nm, cnt[c][b]);
+        }
     p_int(x, "ins", ins);
     p_int(x, "del", del);
     p_int(x, "ref_skip", rs);
@@ -857,7 +932,7 @@ static void pile_set_all(lua_State *L, cm_expr *x, int64_t pos, char ref_ch,
         p_int(x, "strand_code", strand_s ? -1 : 1);
     }
     if (refi >= 0 && muti >= 0) {
-        int u = cnt[refi], m = cnt[muti], o = depth - u - m;
+        int u = tot[refi], m = tot[muti], o = depth - u - m;
         p_int(x, "u", u); p_int(x, "m", m); p_int(x, "o", o);
         p_int(x, "U", u); p_int(x, "M", m); p_int(x, "O", o);
         double rate = (u + m) ? (double)m / (double)(u + m) : 0.0 / 0.0;
@@ -865,23 +940,26 @@ static void pile_set_all(lua_State *L, cm_expr *x, int64_t pos, char ref_ch,
     }
 }
 
-int cm_expr_pile(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
-                 const int cnt[5], int ins, int del, int rs, int fl,
-                 int refi, int muti) {
+int cm_expr_pile(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                 const char *motif, const int cnt[5], int ins, int del, int rs,
+                 int fl, int refi, int muti) {
     if (x == NULL || x->pile_ref == LUA_NOREF) return 1;
-    lua_State *L = x->L;
-    pile_set_all(L, x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti, -1);
-    return run_chunk(L, x->pile_ref);
+    int m[CM_CAT_MAX][5] = {{0}};   /* -p sees site totals: category 0 */
+    for (int b = 0; b < 5; ++b) m[0][b] = cnt[b];
+    pile_set_all(x->L, x, chrom, pos, ref_ch, motif, m, ins, del, rs, fl,
+                 refi, muti, -1);
+    return run_chunk(x->L, x->pile_ref);
 }
 
 /* per-strand row writer for the -o output template */
-int cm_expr_output(cm_expr *x, int64_t pos, char ref_ch, const char *motif,
-                   const int cnt[5], int ins, int del, int rs, int fl,
+int cm_expr_output(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                   const char *motif, const int cnt[CM_CAT_MAX][5],
+                   int ins, int del, int rs, int fl,
                    int refi, int muti, int strand_s, FILE *fp) {
     if (x == NULL || x->output_ref == LUA_NOREF) return 0;
     lua_State *L = x->L;
-    pile_set_all(L, x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti,
-                 strand_s);
+    pile_set_all(L, x, chrom, pos, ref_ch, motif, cnt, ins, del, rs, fl,
+                 refi, muti, strand_s);
     lua_rawgeti(L, LUA_REGISTRYINDEX, x->output_ref);
     if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
         fprintf(stderr, "[countmut] output error: %s\n", lua_tostring(L, -1));

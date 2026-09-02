@@ -62,6 +62,22 @@ countmut -i x -r ref -o out -e "[NM] <= 3 and not (flag.dup ~= 0) and flag.read1
 countmut -i x -r ref -o out -p "depth >= 5 and g >= 2"
 ```
 
+**`-e` is also a group router.**  A bare boolean expression is a filter
+(`true` → count, `nil`/`false` → drop), but an expression that returns an
+integer `0..3` routes each kept base into that **group**; `true` routes to
+group 0.  Anything else drops the base (with a stderr warning).  The split
+shows up in `--output-format` templates as per-group cells `{a.0}` … `{n.3}`
+(plain `{a}` stays the total over all groups):
+
+```bash
+# bisulfite A->G, 2-group router: group 1 = high-conversion bases, group 0 =
+# everything else that passes the hard NS gate (low quality / read-end trim)
+countmut -i x -r ref -o out \
+  -e "([NS] <= 1) and (([Yf] >= 1 and [Zf] <= 3 and bq >= 20 and qpos >= 2 and qlen - qpos > 2) and 1 or 0)" \
+  --output-format "{chrom}\t{pos+1}\t{strand}\t{motif}\t{a.0}\t{a.1}\t{g.0}\t{g.1}" \
+  --motif-pad 15 --fmt-header "chrom\tpos\tstrand\tmotif\tu0\tu1\tm0\tm1"
+```
+
 Most filters use roughly ten variables — `mapq`, `bq` (base quality), `flags`,
 `qpos` (position in the read), `dist5`/`dist3` (distance to the read ends),
 `base`/`ref`, `tag('XX')`, and `rname`. A couple of things are worth knowing.
@@ -79,10 +95,11 @@ reference in [`docs/expression_reference.md`](docs/expression_reference.md).
 ## Output format
 
 `--output-format` takes a **row template**: literal text plus `{expr}`
-placeholders evaluated per site over the site values (`pos`, `ref`, `depth`,
-`a c g t n`, `ins del ref_skip fail`). Placeholders run real Lua, so you can
-compute cells — a conversion ratio is just `{t}/({c}+{t})` — and `round(x, n)`
-and `int(x)` are helpers for formatting:
+placeholders evaluated per site over the site values (`chrom`, `pos`,
+`strand`, `motif`, `ref`, `depth`, `a c g t n`, `ins del ref_skip fail`, and
+per-group counts `a.0` … `n.3` whenever `-e` routes into groups). Placeholders
+run real Lua, so you can compute cells — a conversion ratio is just
+`{t}/({c}+{t})` — and `round(x, n)` and `int(x)` are helpers for formatting:
 
 ```bash
 countmut -i x -r ref -o out \
@@ -101,8 +118,8 @@ Two BAM-walking strategies live in the C core and emit identical output, so
 the engine choice only affects speed (`--engine auto` uses the pileup walk for
 the per-position counting). The options are few: input/reference/output,
 `--region`, `--threads/-t`, `--engine`, `--strandless`, `--count-indels`,
-`--vcf` (+ `--min-depth`/`--min-allele-support`), `-e`/`-p`, and
-`--output-format`/`--fmt-header`.
+`--vcf` (+ `--min-depth`/`--min-allele-support`), `-e`/`-p`, `--motif-pad`,
+and `--output-format`/`--fmt-header`.
 
 ## Input formats
 

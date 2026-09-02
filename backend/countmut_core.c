@@ -75,12 +75,8 @@ static int read_trim_skip(const bam1_t *b, int qpos, int r1_end, int r2_start) {
     return 0;
 }
 
-/* per-site accumulator */
-typedef struct {
-    int cnt[2][3][5]; /* [strand][category][base] */
-    int ins[2], del[2], refskip[2], fail[2];
-} site_t;
-
+/* per-site accumulator: site_t lives in countmut_core.h (cnt is
+ * [strand][CM_CAT_MAX][base]) so the expression layer can index it too. */
 static void site_zero(site_t *s) { memset(s, 0, sizeof(*s)); }
 
 static int better(int mapq, int r1, int q, int omapq, int or1, int oq) {
@@ -96,6 +92,17 @@ static int base_to_index(char c) {
     case 'G': return 2;
     case 'T': return 3;
     default: return 4;
+    }
+}
+
+/* Reverse-complement a single uppercase motif base (A<->T, C<->G, else N). */
+static char rc_nt(char c) {
+    switch (c) {
+    case 'A': return 'T';
+    case 'T': return 'A';
+    case 'C': return 'G';
+    case 'G': return 'C';
+    default: return 'N';
     }
 }
 
@@ -151,7 +158,7 @@ KHASH_INIT(rfc, rf_key, int, 1, rf_hash, rf_equal)
  * A pos/qlen/qname verify guards against a recycled buffer now holding a
  * different read.  Unlike the RF_CAP-based cache this survives deep hotspots
  * (no global eviction: each mplp slot holds at most one read at a time). */
-typedef struct { int64_t pos; int qlen; char *qn; int pass; } expr_cc_t;
+typedef struct { int64_t pos; int qlen; char *qn; int slot; } expr_cc_t;
 static inline khint_t pex_hash(uintptr_t p) {
     return (khint_t)(p >> 3) ^ ((khint_t)(p >> 13) & 0x0ff);
 }
@@ -166,8 +173,9 @@ void bed_destroy(void *_h);
 /* per-worker reusable state */
 typedef struct {
     khash_t(qn) *kh;
-    int *sel, *mapq_a, *r1_a, *q_a, sel_cap;
-    char *motif_buf;
+    int *sel, *mapq_a, *r1_a, *q_a, *g_a, sel_cap;
+    char *motif_buf;      /* reference-forward motif window (per-site) */
+    char *motif_rc_buf;   /* reverse-complemented copy for the minus-strand row */
     char *chr_seq; int chr_len, last_tid;
     BGZF *fp; hts_idx_t *idx; faidx_t *fai;
     void *inc_bed, *exc_bed;
@@ -181,9 +189,10 @@ static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
                         const char *read_expr, const char *pile_expr,
                         const char *output_expr) {
     w->kh = kh_init(qn);
-    w->sel = w->mapq_a = w->r1_a = w->q_a = NULL;
+    w->sel = w->mapq_a = w->r1_a = w->q_a = w->g_a = NULL;
     w->sel_cap = 0;
     w->motif_buf = (char *)malloc(2 * pad + 2);
+    w->motif_rc_buf = (char *)malloc(2 * pad + 2);
     w->chr_seq = NULL; w->chr_len = 0; w->last_tid = -1;
     w->fp = bgzf_open(bam, "r");
     w->idx = bam_index_load(bam);
@@ -200,7 +209,9 @@ static void worker_free(worker_t *w) {
     if (w->mapq_a) free(w->mapq_a);
     if (w->r1_a) free(w->r1_a);
     if (w->q_a) free(w->q_a);
+    if (w->g_a) free(w->g_a);
     if (w->motif_buf) free(w->motif_buf);
+    if (w->motif_rc_buf) free(w->motif_rc_buf);
     if (w->chr_seq) free(w->chr_seq);
     kh_destroy(qn, w->kh);
     if (w->exc_bed) bed_destroy(w->exc_bed);
@@ -251,34 +262,38 @@ static int _read_fails_cached(worker_t *w, const cm_config *cfg, const bam1_t *b
  * the pileup engine evaluate it once per read instead of once per position
  * (the read-walk engine already does once per read).  Per-base expressions are
  * evaluated at every aligned base, uncached. */
+/* Route one aligned base: returns the category slot to count it into
+ * (-1 = drop, 0..CM_CAT_MAX-1 = slot).  The router subsumes both the old -e
+ * keep/drop decision (nil/false -> -1) and the per-category tier assignment
+ * (a number -> that slot; true -> default slot 0). */
 static int expr_pass(worker_t *w, const bam1_t *b, const char *rname,
                      const char *mrname, int s, int qpos, char ref_ch) {
     cm_expr *x = w->expr;
-    if (x == NULL || !cm_expr_has_read(x)) return 1;
+    if (x == NULL || !cm_expr_has_read(x)) return 0;   /* no -e -> default slot 0 */
     if (!cm_expr_read_constant(x))
-        return cm_expr_read(x, b, rname, mrname, qpos, s ? -1 : 1, ref_ch);
+        return cm_expr_route(x, b, rname, mrname, qpos, s ? -1 : 1, ref_ch);
     /* read-constant: memoize by the pileup slot pointer (stable per read
      * across its span) with a pos/qlen/qname verify against recycling. */
-    uintptr_t slot = (uintptr_t)(const void *)b;
-    khint_t k = kh_get(pex, w->pexc, slot);
+    uintptr_t key = (uintptr_t)(const void *)b;
+    khint_t k = kh_get(pex, w->pexc, key);
     if (k != kh_end(w->pexc)) {
         expr_cc_t *cc = &kh_val(w->pexc, k);
         if (cc->pos == b->core.pos && cc->qlen == (int)b->core.l_qseq
             && cc->qn && strcmp(cc->qn, bam_get_qname(b)) == 0)
-            return cc->pass;
+            return cc->slot;
         free(cc->qn); cc->qn = NULL;
     }
-    int pass = cm_expr_read(x, b, rname, mrname, 0, s ? -1 : 1, 'N');
+    int slot = cm_expr_route(x, b, rname, mrname, 0, s ? -1 : 1, 'N');
     if (k == kh_end(w->pexc)) {
-        int ret; k = kh_put(pex, w->pexc, slot, &ret);
+        int ret; k = kh_put(pex, w->pexc, key, &ret);
         memset(&kh_val(w->pexc, k), 0, sizeof(expr_cc_t)); /* fresh slots are uninitialized */
     }
     expr_cc_t *cc = &kh_val(w->pexc, k);
     if (cc->qn == NULL) cc->qn = strdup(bam_get_qname(b));
     cc->pos = b->core.pos;
     cc->qlen = (int)b->core.l_qseq;
-    cc->pass = pass;
-    return pass;
+    cc->slot = slot;
+    return slot;
 }
 
 typedef struct { int tid, beg, end; } region_t;
@@ -344,15 +359,12 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
     /* custom output template (-o): evaluate it per emitted strand and write
      * exactly what it returns; bypasses the built-in formats. */
     if (w != NULL && w->expr && cm_expr_has_output(w->expr)) {
-        int cnt[5] = {0};
-        int ins = 0, del = 0, rs = 0, fl = 0;
-        for (int s = 0; s < 2; ++s) {
-            for (int c = 0; c < 3; ++c)
-                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
-            ins += site->ins[s]; del += site->del[s]; rs += site->refskip[s]; fl += site->fail[s];
-        }
+        /* Reference-forward motif window for {motif} (built whenever the
+         * sequence is available, not only in the legacy conversion view);
+         * the minus-strand row gets its reverse complement (parity with the
+         * bisulfite reformat bridge). */
         const char *motif = NULL;
-        if (cfg->out == CM_OUT_CONVERSION && w->chr_len > 0) {
+        if (w->chr_len > 0) {
             int mlen = cfg->pad * 2 + 1;
             for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2)
                 w->motif_buf[k2 - ((int)pos - cfg->pad)] =
@@ -360,16 +372,29 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
             w->motif_buf[mlen] = 0;
             motif = w->motif_buf;
         }
-        int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
+        /* ref_base/mut_base are legacy/unused (always 0) -> -1 (unset), so the
+         * derived u/m/o fields stay off for template rows. */
+        int refi = cfg->ref_base ? base_to_index((char)cfg->ref_base) : -1;
+        int muti = cfg->mut_base ? base_to_index((char)cfg->mut_base) : -1;
+        /* Per-strand rows: counts are this strand only, per category slot. */
         for (int s = 0; s < 2; ++s) {
             if (s == 0 && !emit_plus) continue;
             if (s == 1 && !emit_minus) continue;
             int sdepth = site->ins[s] + site->del[s] + site->refskip[s] + site->fail[s];
-            for (int c = 0; c < 3; ++c)
+            for (int c = 0; c < CM_CAT_MAX; ++c)
                 for (int b = 0; b < 5; ++b) sdepth += site->cnt[s][c][b];
             if (sdepth == 0) continue;   /* match the built-in formats: skip empty strands */
-            cm_expr_output(w->expr, pos, ref_ch, motif, cnt, ins, del, rs, fl,
-                           refi, muti, s, fp);
+            const char *mot_s = motif;
+            if (motif && s == 1) {       /* minus strand: reverse complement */
+                int mlen = cfg->pad * 2 + 1;
+                for (int k2 = 0; k2 < mlen; ++k2)
+                    w->motif_rc_buf[k2] = rc_nt(motif[mlen - 1 - k2]);
+                w->motif_rc_buf[mlen] = 0;
+                mot_s = w->motif_rc_buf;
+            }
+            cm_expr_output(w->expr, hdr->target_name[tid], pos, ref_ch, mot_s,
+                           site->cnt[s], site->ins[s], site->del[s],
+                           site->refskip[s], site->fail[s], refi, muti, s, fp);
         }
         return;
     }
@@ -413,25 +438,29 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
             for (int s = 0; s < 2; ++s) {
                 if (s == 0 && !emit_plus) continue;
                 if (s == 1 && !emit_minus) continue;
-                int dep = site->cnt[s][0][0]+site->cnt[s][0][1]+site->cnt[s][0][2]+site->cnt[s][0][3]+site->cnt[s][0][4];
+                int cnt[5] = {0};
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
+                int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
                 int t_ins = site->ins[s], t_del = site->del[s], t_rs = site->refskip[s], t_fl = site->fail[s];
                 if (dep + t_rs + t_del + t_ins + t_fl == 0) continue;
                 if (cfg->min_depth > 0 && dep < cfg->min_depth) continue;
                 fprintf(fp, "%s\t%d\t%c\t%c\t%d\t%d\t%d\t%d\t%d\t%d",
                         hdr->target_name[tid], (int)pos + 1, s ? '-' : '+', ref_ch, dep,
-                        site->cnt[s][0][0], site->cnt[s][0][1], site->cnt[s][0][2],
-                        site->cnt[s][0][3], site->cnt[s][0][4]);
+                        cnt[0], cnt[1], cnt[2], cnt[3], cnt[4]);
                 if (cfg->count_indels) fprintf(fp, "\t%d\t%d\t%d\t%d", t_ins, t_del, t_rs, t_fl);
                 fputc('\n', fp);
             }
         } else {
             int cnt[5] = {0}; int t_ins = 0, t_del = 0, t_rs = 0, t_fl = 0;
             if (emit_plus) {
-                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[0][0][b];
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[0][c][b];
                 t_ins += site->ins[0]; t_del += site->del[0]; t_rs += site->refskip[0]; t_fl += site->fail[0];
             }
             if (emit_minus) {
-                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[1][0][b];
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[1][c][b];
                 t_ins += site->ins[1]; t_del += site->del[1]; t_rs += site->refskip[1]; t_fl += site->fail[1];
             }
             int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
@@ -444,8 +473,12 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
         }
     } else { /* allele */
         int cnt[5] = {0};
-        if (emit_plus) for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[0][0][b];
-        if (emit_minus) for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[1][0][b];
+        if (emit_plus)
+            for (int c = 0; c < CM_CAT_MAX; ++c)
+                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[0][c][b];
+        if (emit_minus)
+            for (int c = 0; c < CM_CAT_MAX; ++c)
+                for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[1][c][b];
         int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
         if (dep <= 0) return;
         if (cfg->min_depth > 0 && dep < cfg->min_depth) return;
@@ -469,16 +502,17 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
  * A/C/G/T/N totals (both strands, all quality tiers) plus indels, and the
  * reference window for mutation mode.  Returns 1 = keep, 0 = omit. */
 static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
-                           const site_t *site, int64_t pos, char ref_ch) {
+                           const char *chrom, const site_t *site, int64_t pos,
+                           char ref_ch) {
     int cnt[5] = {0};
     int ins = 0, del = 0, rs = 0, fl = 0;
     for (int s = 0; s < 2; ++s) {
-        for (int c = 0; c < 3; ++c)
+        for (int c = 0; c < CM_CAT_MAX; ++c)
             for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
         ins += site->ins[s]; del += site->del[s]; rs += site->refskip[s]; fl += site->fail[s];
     }
     const char *motif = NULL;
-    if (cfg->out == CM_OUT_CONVERSION && w->chr_len > 0) {
+    if (w->chr_len > 0) {   /* motif window for -p/-o expressions (ref-forward) */
         int mlen = cfg->pad * 2 + 1;
         for (int k2 = (int)pos - cfg->pad; k2 < (int)pos + cfg->pad + 1; ++k2) {
             w->motif_buf[k2 - ((int)pos - cfg->pad)] =
@@ -487,8 +521,10 @@ static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
         w->motif_buf[mlen] = 0;
         motif = w->motif_buf;
     }
-    int refi = base_to_index((char)cfg->ref_base), muti = base_to_index((char)cfg->mut_base);
-    return cm_expr_pile(x, pos, ref_ch, motif, cnt, ins, del, rs, fl, refi, muti);
+    int refi = cfg->ref_base ? base_to_index((char)cfg->ref_base) : -1;
+    int muti = cfg->mut_base ? base_to_index((char)cfg->mut_base) : -1;
+    return cm_expr_pile(x, chrom, pos, ref_ch, motif, cnt, ins, del, rs, fl,
+                        refi, muti);
 }
 
 /* Fetch + uppercase the chromosome sequence once per tid (instead of calling
@@ -537,6 +573,7 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             w->mapq_a = (int *)realloc(w->mapq_a, n * sizeof(int));
             w->r1_a = (int *)realloc(w->r1_a, n * sizeof(int));
             w->q_a = (int *)realloc(w->q_a, n * sizeof(int));
+            w->g_a = (int *)realloc(w->g_a, n * sizeof(int));
             w->sel_cap = n;
         }
         site_zero(&site);
@@ -556,13 +593,15 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             if (s == 0) { if (qpos < cfg->trim_fragment_start || qlen - qpos <= cfg->trim_fragment_end) continue; }
             else { if (qpos < cfg->trim_fragment_end || qlen - qpos <= cfg->trim_fragment_start) continue; }
             if (read_trim_skip(b, qpos, cfg->trim_r1_end, cfg->trim_r2_start)) continue;
-            /* -e read filter (once per read when read-constant via exprc memo,
-             * else per aligned base; same spot as the Python engine) */
-            if (!expr_pass(w, b, hdr->target_name[tid],
-                           (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
-                               ? hdr->target_name[b->core.mtid] : "",
-                           s, qpos, ref_ch))
-                continue;
+            /* -e read router: returns the category slot (-1 = drop).  Evaluated
+             * once per read when read-constant via the exprc memo, else per
+             * aligned base (the same spot as the Python engine). */
+            int g = expr_pass(w, b, hdr->target_name[tid],
+                              (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
+                                  ? hdr->target_name[b->core.mtid] : "",
+                              s, qpos, ref_ch);
+            if (g < 0) continue;
+            w->g_a[i] = g;
             int mapq = (int)b->core.qual;
             int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
             int qual = (int)bam_get_qual(b)[qpos];
@@ -599,7 +638,11 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             if (cfg->out == CM_OUT_CONVERSION) {
                 site.cnt[s][(qual >= cfg->min_baseq) ? 2 : 0][base_i]++;
             } else {
-                site.cnt[s][0][base_i]++;
+                /* router-assigned category slot (0..CM_CAT_MAX-1); g_a set in
+                 * the selection loop for every kept candidate. */
+                int cat = w->g_a[i];
+                if (cat < 0) cat = 0;                 /* defensive */
+                site.cnt[s][cat][base_i]++;
             }
         }
 
@@ -608,7 +651,8 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
         const int emit_minus = cfg->strand_process != CM_STRAND_FORWARD;
         /* -p site filter */
         if (w->expr && cm_expr_has_pile(w->expr)
-            && !expr_pile_apply(w->expr, cfg, w, &site, pos, ref_ch))
+            && !expr_pile_apply(w->expr, cfg, w, hdr->target_name[tid], &site,
+                                pos, ref_ch))
             continue;
         emit_site(w, cfg, hdr, fp, tid, pos, ref_ch, &site, emit_plus, emit_minus);
     }
@@ -663,7 +707,7 @@ static inline khint_t posi_hash(khint64_t key) {
 KHASH_INIT(posi, khint64_t, int, 1, posi_hash, kh_int64_hash_equal)
 
 /* winner of a (pos,qname) dedup bucket */
-typedef struct { int mapq, r1, qual, strand, base; } rw_w;
+typedef struct { int mapq, r1, qual, strand, base, slot; } rw_w;
 
 /* growable map pos -> site_t (one entry per visited reference position) */
 typedef struct {
@@ -766,13 +810,19 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
         if ((int)qpos < cfg->trim_fragment_end || (int)qlen - (int)qpos <= cfg->trim_fragment_start) return wins;
     }
     if (read_trim_skip(b, (int)qpos, cfg->trim_r1_end, cfg->trim_r2_start)) return wins;
-    if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)
-        && !cm_expr_read(w->expr, b, hdr->target_name[tid],
-                         (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
-                             ? hdr->target_name[b->core.mtid] : "",
-                         (int)qpos, s ? -1 : 1,
-                         (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N'))
-        return wins;
+    /* -e router: category slot (-1 = drop).  Read-constant -e is applied once
+     * per read by the caller (see count_interval_readwalk); here we route the
+     * per-base (non-read-constant) case only, which is what a bq/qpos-based
+     * router needs.  Default slot is 0. */
+    int rslot = 0;
+    if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
+        rslot = cm_expr_route(w->expr, b, hdr->target_name[tid],
+                              (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets)
+                                  ? hdr->target_name[b->core.mtid] : "",
+                              (int)qpos, s ? -1 : 1,
+                              (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N');
+        if (rslot < 0) return wins;
+    }
     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
     int base_i = nt16_index(nt);
     /* Minus reads: stored SEQ is 5'->3' (SAM spec) but qpos walks CIGAR order
@@ -782,7 +832,7 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
     int qual = (int)bam_get_qual(b)[qpos];
     if (direct) {
         int cat = (cfg->out == CM_OUT_CONVERSION)
-            ? ((qual >= cfg->min_baseq) ? 2 : 0) : 0;
+            ? ((qual >= cfg->min_baseq) ? 2 : 0) : rslot;
         sm_get(sm, ref_pos)->cnt[s][cat][base_i]++;
         return wins;
     }
@@ -798,13 +848,13 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
         }
         int idx = (*wins_n)++;
         wins[idx].mapq = mapq; wins[idx].r1 = r1; wins[idx].qual = qual;
-        wins[idx].strand = s; wins[idx].base = base_i;
+        wins[idx].strand = s; wins[idx].base = base_i; wins[idx].slot = rslot;
         kh_val(h, kh) = idx;
     } else {
         int j = kh_val(h, kh);
         if (better(mapq, r1, qual, wins[j].mapq, wins[j].r1, wins[j].qual)) {
             wins[j].mapq = mapq; wins[j].r1 = r1; wins[j].qual = qual;
-            wins[j].strand = s; wins[j].base = base_i;
+            wins[j].strand = s; wins[j].base = base_i; wins[j].slot = rslot;
         }
     }
     return wins;
@@ -983,7 +1033,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         int64_t pos = kh_key(h, k).pos;
         const rw_w *win = &wins[kh_val(h, k)];
         int cat = (cfg->out == CM_OUT_CONVERSION)
-            ? ((win->qual >= cfg->min_baseq) ? 2 : 0) : 0;
+            ? ((win->qual >= cfg->min_baseq) ? 2 : 0) : win->slot;
         site_t *st = sm_get(&sm, pos);
         st->cnt[win->strand][cat][win->base]++;
     }
@@ -1003,7 +1053,8 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         /* -p site filter */
         if (w->expr && cm_expr_has_pile(w->expr)
-            && !expr_pile_apply(w->expr, cfg, w, &sm.st[ord[i].idx], pos, ref_ch))
+            && !expr_pile_apply(w->expr, cfg, w, hdr->target_name[tid],
+                                &sm.st[ord[i].idx], pos, ref_ch))
             continue;
         emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.st[ord[i].idx], emit_plus, emit_minus);
     }

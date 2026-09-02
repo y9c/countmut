@@ -4,6 +4,21 @@
 old-school filter/trim flags — everything QC-like is an expression, evaluated
 in the fast C backend (embedded Lua). Both engines apply them identically.
 
+**`-e` is also a group router.**  A bare boolean expression is a filter
+(`true` → keep, `nil`/`false` → drop).  But if the expression returns an
+integer `0..3`, each kept base is routed into that **group** (up to four
+tiers); `true` routes to group 0; any other value drops the base with a
+stderr warning.  Per-group counts are exposed in `--output-format` templates
+as `{a.0}` … `{n.3}` (plain `{a}` stays the per-strand total over all groups):
+
+```
+# bisulfite A->G, 2 groups: g1 = high-conversion bases, g0 = rest (kept)
+-e "([NS] <= 1) and (([Yf] >= 1 and [Zf] <= 3 and bq >= 20 and qpos >= 2 and qlen - qpos > 2) and 1 or 0)"
+-o out --fmt-header "chrom\tpos\tstrand\tmotif\tu0\tu1\tm0\tm1" \
+       --output-format "{chrom}\t{pos+1}\t{strand}\t{motif}\t{a.0}\t{a.1}\t{g.0}\t{g.1}" \
+       --motif-pad 15
+```
+
 ## Quick reference: what you used before
 
 | old flag / idea | write this |

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-02
+
+### Added
+- **`-e` is now a group router, not just a keep/drop filter.**  The read
+  expression is evaluated per kept `(read, base)`:
+  - `nil` / `false` → the base is dropped (as before);
+  - `true` → counts into group 0 (backward compatible: a bare boolean
+    expression behaves exactly like the old filter);
+  - an integer in `0..3` → counts into that group;
+  - anything else (e.g. a string) → the base is dropped and a warning is
+    printed to stderr.
+  This lets one expression split bases into up to four quality/conversion
+  tiers, e.g. bisulfite A→G:
+  `([NS] <= 1) and (([Yf] >= 1 and [Zf] <= 3 and bq >= 20 and qpos >= 2 and qlen - qpos > 2) and 1 or 0)`.
+- **Per-group base counts in `--output-format` templates.**  Row-template
+  placeholders may reference a specific group as `{a.0}` … `{n.3}` (any
+  Lua works inside the braces, e.g. `{a.0 + a.1}`); the plain `{a}` (and
+  `c/g/t/n`) remains the per-strand total across all groups.  With a
+  two-group A→G router, `{a.0}\t{a.1}\t{g.0}\t{g.1}` is the per-strand
+  2-group conversion view.
+- **`--motif-pad N` (C core and Python CLI).**  The `{motif}` template cell is
+  a `2*N+1` reference window centered on the site (`0`, the default, is the
+  single reference base); out-of-contig padding is `N`; minus-strand rows get
+  the reverse complement.
+
+### Changed
+- Built-in composition and allele emitters now sum **all** category slots,
+  so reads routed to groups 1–3 are included in the default output, not just
+  group 0.
+
 ## [0.2.1] - 2026-09-02
 
 ### Fixed
