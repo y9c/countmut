@@ -126,7 +126,8 @@ def test_router_per_group_counts(data):
             ("6", "-"): (2, 0, 0, 0),   # m_hi qpos1->g0, m_lo g0
             ("7", "+"): (1, 2, 0, 0),
             ("7", "-"): (1, 1, 0, 0),   # m_hi qpos2->g1, m_lo g0
-            ("8", "+"): (0, 0, 0, 0),   # plus reads store T here (site kept by minus)
+            # ('8', '+') is dropped: the plus reads store T there, so the
+            # strand-aware -p filter (ref == 'A') sees base=T and rejects it.
             ("8", "-"): (1, 1, 0, 0),   # m_hi qpos3->g1, m_lo g0
         }
         assert got == exp, f"[{engine}] group counts mismatch:\ngot {got}\nexp {exp}"

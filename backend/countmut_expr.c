@@ -972,6 +972,20 @@ int cm_expr_pile(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
     return run_chunk(x->L, x->pile_ref);
 }
 
+/* Per-strand -p evaluation: same as cm_expr_pile but with the strand-specific
+ * counts and strand_s set (0/1), so a strand-aware filter like `base == 'A'`
+ * sees the reference base ON that strand. */
+int cm_expr_pile_strand(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                        const char *motif, const int cnt[5], int ins, int del,
+                        int rs, int fl, int refi, int muti, int strand_s) {
+    if (x == NULL || x->pile_ref == LUA_NOREF) return 1;
+    int m[CM_CAT_MAX][5] = {{0}};   /* -p sees site totals: category 0 */
+    for (int b = 0; b < 5; ++b) m[0][b] = cnt[b];
+    pile_set_all(x->L, x, chrom, pos, ref_ch, motif, m, ins, del, rs, fl,
+                 refi, muti, strand_s);
+    return run_chunk(x->L, x->pile_ref);
+}
+
 /* per-strand row writer for the -o output template */
 int cm_expr_output(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
                    const char *motif, const int cnt[CM_CAT_MAX][5],

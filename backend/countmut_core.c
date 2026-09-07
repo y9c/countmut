@@ -468,16 +468,16 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
 /* Evaluate the -p (pile/site) filter for a fully-built site_t.  Computes the
  * A/C/G/T/N totals (both strands, all quality tiers) plus indels, and the
  * reference window for mutation mode.  Returns 1 = keep, 0 = omit. */
-static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
-                           const char *chrom, const site_t *site, int64_t pos,
-                           char ref_ch) {
-    int cnt[5] = {0};
-    int ins = 0, del = 0, rs = 0, fl = 0;
-    for (int s = 0; s < 2; ++s) {
-        for (int c = 0; c < CM_CAT_MAX; ++c)
-            for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
-        ins += site->ins[s]; del += site->del[s]; rs += site->refskip[s]; fl += site->fail[s];
-    }
+/* Evaluate the -p site filter PER STRAND.  Returns a bitmask: bit 0 = the
+ * '+' strand passes, bit 1 = the '-' strand passes.  A site is kept if at
+ * least one strand passes; emit_site then emits only the passing strand(s),
+ * so a strand-aware filter like `base == 'A'` keeps only the A-site strand
+ * and drops the spurious complement-strand rows.  When -p is not set both
+ * bits are set (no strand filtering). */
+static int expr_pile_apply_strands(cm_expr *x, const cm_config *cfg, worker_t *w,
+                                   const char *chrom, const site_t *site,
+                                   int64_t pos, char ref_ch) {
+    if (x == NULL || !cm_expr_has_pile(x)) return 3;   /* both strands */
     const char *motif = NULL;
     if (w->chr_len > 0) {   /* motif window for -p/-o expressions (ref-forward) */
         int mlen = cfg->pad * 2 + 1;
@@ -489,8 +489,17 @@ static int expr_pile_apply(cm_expr *x, const cm_config *cfg, worker_t *w,
         motif = w->motif_buf;
     }
     int refi = -1, muti = -1;   /* no ref/mut targets in the unified counter */
-    return cm_expr_pile(x, chrom, pos, ref_ch, motif, cnt, ins, del, rs, fl,
-                        refi, muti);
+    int mask = 0;
+    for (int s = 0; s < 2; ++s) {
+        int cnt[5] = {0};
+        int ins = site->ins[s], del = site->del[s], rs = site->refskip[s], fl = site->fail[s];
+        for (int c = 0; c < CM_CAT_MAX; ++c)
+            for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[s][c][b];
+        if (cm_expr_pile_strand(x, chrom, pos, ref_ch, motif, cnt, ins, del, rs, fl,
+                                refi, muti, s))
+            mask |= (1 << s);
+    }
+    return mask;
 }
 
 /* Fetch + uppercase the chromosome sequence once per tid (instead of calling
@@ -605,13 +614,15 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
         }
 
         /* ---------- emit ---------- */
-        const int emit_plus = cfg->strand_process != CM_STRAND_REVERSE;
-        const int emit_minus = cfg->strand_process != CM_STRAND_FORWARD;
-        /* -p site filter */
-        if (w->expr && cm_expr_has_pile(w->expr)
-            && !expr_pile_apply(w->expr, cfg, w, hdr->target_name[tid], &site,
-                                pos, ref_ch))
-            continue;
+        int emit_plus = cfg->strand_process != CM_STRAND_REVERSE;
+        int emit_minus = cfg->strand_process != CM_STRAND_FORWARD;
+        /* -p site filter (per-strand): keep the site if either strand passes,
+         * then emit only the passing strand(s). */
+        int smask = expr_pile_apply_strands(w->expr, cfg, w, hdr->target_name[tid],
+                                            &site, pos, ref_ch);
+        if (smask == 0) continue;
+        emit_plus = emit_plus && (smask & 1);
+        emit_minus = emit_minus && (smask & 2);
         emit_site(w, cfg, hdr, fp, tid, pos, ref_ch, &site, emit_plus, emit_minus);
     }
     free(n_plp); free(plp);
@@ -932,12 +943,13 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
         if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
         if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
-        /* -p site filter */
-        if (w->expr && cm_expr_has_pile(w->expr)
-            && !expr_pile_apply(w->expr, cfg, w, hdr->target_name[tid],
-                                &sm.st[ord[i].idx], pos, ref_ch))
-            continue;
-        emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.st[ord[i].idx], emit_plus, emit_minus);
+        /* -p site filter (per-strand): keep the site if either strand passes,
+         * then emit only the passing strand(s). */
+        int smask = expr_pile_apply_strands(w->expr, cfg, w, hdr->target_name[tid],
+                                            &sm.st[ord[i].idx], pos, ref_ch);
+        if (smask == 0) continue;
+        emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.st[ord[i].idx],
+                  emit_plus && (smask & 1), emit_minus && (smask & 2));
     }
 
     /* cleanup */

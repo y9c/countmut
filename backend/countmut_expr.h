@@ -67,6 +67,12 @@ int cm_expr_pile(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
                  const char *motif, const int cnt[5], int ins, int del, int rs,
                  int fl, int refi, int muti);
 
+/* Per-strand -p evaluation: like cm_expr_pile but with strand_s (0/1) set so
+ * a strand-aware filter sees the reference base on that strand. */
+int cm_expr_pile_strand(cm_expr *x, const char *chrom, int64_t pos, char ref_ch,
+                        const char *motif, const int cnt[5], int ins, int del,
+                        int rs, int fl, int refi, int muti, int strand_s);
+
 /* Evaluate the output-row template for one emitted strand (strand_s: 0 = '+',
  * 1 = '-') of a site and write the resulting line to `fp`.  `chrom` is the
  * contig name; `pos` is 0-based; `cnt[CM_CAT_MAX][5]` is the per-category,

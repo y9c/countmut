@@ -173,6 +173,18 @@ console = Console()
     ),
 )
 @click.option(
+    "--target-base",
+    "target_base",
+    type=str,
+    default=None,
+    show_default=True,
+    help=(
+        "Emit only the strand whose reference base equals this base (e.g. 'A' "
+        "for m6A A->G).  Drops the spurious complement-strand rows so each site "
+        "appears once, on the strand carrying the target base."
+    ),
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -194,6 +206,7 @@ def main(
     output_format,
     fmt_header,
     motif_pad,
+    target_base,
     verbose,
 ):
     """[bold green]countmut: one counter, output format is yours[/bold green]."""
@@ -220,6 +233,7 @@ def main(
         output_expr=output_expr,
         fmt_header=fmt_header,
         motif_pad=motif_pad,
+        target_base=target_base,
         verbose=verbose,
     )
 

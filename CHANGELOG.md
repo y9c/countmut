@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-08
+
+### Changed
+- **`-p` is now evaluated PER STRAND.**  A site is kept if either strand
+  passes the filter, and only the passing strand(s) are emitted.  A
+  strand-aware filter like `base == 'A'` therefore keeps only the A-site
+  strand and drops the spurious complement-strand rows, without needing a
+  separate `--target-base` flag.
+- Expose `--target-base` through the Python CLI (passes through to the C core).
+
+### Fixed
+- `-p` region filtering works via `pos`/`chrom` in the filter expression.
+
 ## [0.2.4] - 2026-09-08
 
 ### Fixed
