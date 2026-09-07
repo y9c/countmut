@@ -101,6 +101,7 @@ static int strand_from(const char *s) {
 int main(int argc, char **argv) {
     cm_config cfg;
     memset(&cfg, 0, sizeof(cfg));
+    cfg.target_base = -1;   /* no strand filter by default (--target-base unset) */
     cfg.out = CM_OUT_COMPOSITION;
     cfg.engine = CM_ENGINE_AUTO;
     cfg.min_mapq = 0;
