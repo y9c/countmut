@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-08
+
+### Added
+- **Strand-aware `base` token** in the `-p`/`-o` namespace.  `base` is the
+  reference base on the site's strand: for a `-` strand row it is the
+  complement of the genomic reference base.  A filter `base == 'A'` therefore
+  keeps m6A A-sites on **both** strands (genomic ref A = `+` A-site; genomic
+  ref T = `-` A-site), fixing the previous behavior where `ref == 'A'` only
+  kept `+` strand A-sites and wrongly kept `-` strand T-sites.
+- **`--target-base <base>`**: emit only the strand whose reference base equals
+  the target base.  For m6A this drops the spurious complement-strand rows so
+  each site appears once, on the strand carrying the A.
+
+### Removed
+- **Dead legacy `CM_OUT_CONVERSION` output path** and the always-zero
+  `ref_base` / `mut_base` / `ref_base2` / `mut_base2` / `save_rest` config
+  fields, plus the now-unused `tgt` fast-path and helper functions
+  (`cigar_has_indels`, `cigar_leading_softclips`, `cigar_ref_len`,
+  `tgt_lower_bound`).  Net ~-95 lines.
+
 ## [0.2.2] - 2026-09-02
 
 ### Added
