@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-08
+
+### Fixed
+- **`--target-base` default was `'A'` (index 0) instead of "no filter"**.
+  `cm_config` is zero-initialized, so `target_base` defaulted to `0` and
+  silently dropped `-` strand rows even when `--target-base` was not given.
+  It now defaults to `-1` (no strand filter) unless `--target-base` is set.
+  All 54 tests pass.
+
 ## [0.2.3] - 2026-09-08
 
 ### Added
