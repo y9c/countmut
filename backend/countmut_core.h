@@ -42,7 +42,6 @@ typedef struct {
 #define CM_STRAND_FORWARD 1
 #define CM_STRAND_REVERSE 2
 
-#define CM_OUT_CONVERSION  0  /* legacy/unused: u/m conversion view (dead)   */
 #define CM_OUT_COMPOSITION 1  /* output format: per-base composition (default) */
 #define CM_OUT_ALLELE      2  /* output format: ref/alt / VCF                */
 
@@ -50,12 +49,11 @@ typedef struct {
     int32_t out;             /* CM_OUT_* (output format) */
     int32_t engine;          /* CM_ENGINE_* */
     int32_t vcf;             /* allele output: emit VCF */
-    int     ref_base;        /* legacy/unused: always 0 (no --ref-base flag) */
-    int     mut_base;
-    int     ref_base2;       /* legacy/unused: always 0 */
-    int     mut_base2;
+    int     target_base;     /* strand-aware reference base to emit (-1 = no filter).
+                                When set, only the strand whose reference base
+                                equals this base is emitted (m6A A-site on either
+                                strand). */
     int     pad;             /* {motif} reference window: 2*pad+1 bases (--motif-pad) */
-    int     save_rest;       /* legacy/unused */
     const char *output_expr; /* -o output-row template (overrides the built-in format) */
     const char *fmt_header;  /* header line for a custom output template ("" = none) */
     int     min_mapq;

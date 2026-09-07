@@ -168,6 +168,7 @@ int main(int argc, char **argv) {
         {"pile-expr", required_argument, 0, 2003},
         {"output-expr", required_argument, 0, 2004},
         {"fmt-header", required_argument, 0, 2005},
+        {"target-base", required_argument, 0, 2006},
         {"verbose", no_argument, 0, 'V'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0},
@@ -180,6 +181,11 @@ int main(int argc, char **argv) {
         case 2003: cfg.pile_expr = optarg; break;
         case 2004: cfg.output_expr = optarg; break;
         case 2005: cfg.fmt_header = optarg; break;
+        case 2006: {
+            char tb = (char)toupper((unsigned char)optarg[0]);
+            cfg.target_base = (tb == 'A') ? 0 : (tb == 'C') ? 1 : (tb == 'G') ? 2 : (tb == 'T') ? 3 : -1;
+            break;
+        }
         case 'V': cfg.verbose = 1; break;
         case 'f': fa = optarg; break;
         case 'o': out = optarg; break;

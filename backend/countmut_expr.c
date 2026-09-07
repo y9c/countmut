@@ -473,7 +473,7 @@ static int compile_chunk(lua_State *L, const char *expr, const char *what,
     if (need_qpos)    *need_qpos    = has_token(src, "qpos") || has_token(src, "QPOS");
     if (need_bq)      *need_bq      = has_token(src, "bq") || has_token(src, "BQ") || has_token(src, "baseq");
     if (need_base)    *need_base    = has_token(src, "base");
-    if (need_ref)     *need_ref     = has_token(src, "ref");
+    if (need_ref)     *need_ref     = has_token(src, "ref") || has_token(src, "base") || has_token(src, "BASE");
     if (need_dist)    *need_dist    = has_token(src, "dist5") || has_token(src, "dist3")
                                       || has_token(src, "DIST5") || has_token(src, "DIST3")
                                       || has_token(src, "distance_from_5prime")
@@ -897,11 +897,32 @@ static void pile_set_all(lua_State *L, cm_expr *x, const char *chrom, int64_t po
     char refstr[2] = { ref_ch ? ref_ch : 'N', 0 };
     const char *mot = motif ? motif : "";
 
+    /* Strand-aware m6A reference base.  For the site-level (-p) namespace the
+     * site is a potential A-site if the genomic reference is A (the '+'
+     * strand A-site) or T (the '-' strand A-site).  For a per-strand row
+     * (strand_s == 0/1) `base` is the reference base ON THAT STRAND, so a
+     * filter `base == 'A'` keeps A-sites on both strands automatically. */
+    char basestr[2] = { 'N', 0 };
+    if (strand_s == 0) {              /* '+' strand: reference base = genomic */
+        basestr[0] = ref_ch ? ref_ch : 'N';
+    } else if (strand_s == 1) {       /* '-' strand: reference base = complement */
+        static const char comp[256] = { ['A']='T', ['T']='A', ['C']='G', ['G']='C' };
+        basestr[0] = ref_ch ? comp[(unsigned char)ref_ch] : 'N';
+        if (basestr[0] == 0) basestr[0] = 'N';
+    } else {                          /* site-level: A-site on either strand */
+        if (ref_ch == 'A' || ref_ch == 'T')
+            basestr[0] = 'A';
+        else if (ref_ch)
+            basestr[0] = ref_ch;
+    }
+
     p_int(x, "pos", (lua_Integer)pos);
     p_int(x, "POS", (lua_Integer)pos);
     p_str(x, "ref", refstr);
     p_str(x, "ref_base", refstr);
     p_str(x, "REF", refstr);
+    p_str(x, "base", basestr);
+    p_str(x, "BASE", basestr);
     p_int(x, "depth", depth);
     p_int(x, "DEPTH", depth);
     p_str(x, "chrom", chrom ? chrom : "");
