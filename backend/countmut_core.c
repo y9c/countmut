@@ -25,8 +25,18 @@
 #include <unistd.h>
 #include <zlib.h>
 
-#include "sam.h"
-#include "faidx.h"
+#include <htslib/sam.h>
+#ifndef bam_pe32
+static inline uint32_t bam_pe32(const void *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+#endif
+#ifndef bam_cigar_op_p
+#define bam_cigar_op_p(p) bam_cigar_op(bam_pe32(p))
+#endif
+#ifndef bam_cigar_oplen_p
+#define bam_cigar_oplen_p(p) bam_cigar_oplen(bam_pe32(p))
+#endif
+#include <htslib/faidx.h>
+#include <htslib/thread_pool.h>
 #include "ksort.h"
 #include "khash.h"
 #include "countmut_core.h"
@@ -66,15 +76,6 @@ static int bio_strand(const bam1_t *b) {
  *   R1: `r1_end` bases off its 3' query end  (qpos >= len - r1_end)
  *   R2: `r2_start` bases off its 5' query start (qpos < r2_start)
  * Returns 1 when the base at `qpos` should be skipped. */
-static int read_trim_skip(const bam1_t *b, int qpos, int r1_end, int r2_start) {
-    if (!(b->core.flag & BAM_FPAIRED)) return 0;
-    if (r1_end > 0 && (b->core.flag & BAM_FREAD1))
-        return qpos >= (int)b->core.l_qseq - r1_end;
-    if (r2_start > 0 && (b->core.flag & BAM_FREAD2))
-        return qpos < r2_start;
-    return 0;
-}
-
 /* per-site accumulator: site_t lives in countmut_core.h (cnt is
  * [strand][CM_CAT_MAX][base]) so the expression layer can index it too. */
 static void site_zero(site_t *s) { memset(s, 0, sizeof(*s)); }
@@ -106,58 +107,34 @@ static char rc_nt(char c) {
     }
 }
 
-/* read-level filters (samtools reqflags/exclflags + mapq + NS + bisulfite tags) */
+/* read-level filters (samtools reqflags/exclflags; mapq/quality are -e filters) */
 static int read_fails(const cm_config *cfg, const bam1_t *b) {
     if (cfg->req_flags && (b->core.flag & (uint32_t)cfg->req_flags) != (uint32_t)cfg->req_flags) return 1;
     if (cfg->excl_flags && (b->core.flag & (uint32_t)cfg->excl_flags)) return 1;
-    if ((int)b->core.qual < cfg->min_mapq) return 1;
-    if (cfg->max_sub >= 0) {
-        uint8_t *aux = bam_aux_get(b, "NS");
-        if (aux && bam_aux2i(aux) > cfg->max_sub) return 1;
-    }
-    if (cfg->max_unc >= 0 && cfg->min_con >= 0) {
-        uint8_t *zf = bam_aux_get(b, "Zf");
-        uint8_t *yf = bam_aux_get(b, "Yf");
-        if (zf && yf) {
-            if (!(bam_aux2i(zf) <= cfg->max_unc && bam_aux2i(yf) >= cfg->min_con)) return 1;
-        }
-    }
     return 0;
 }
 
 typedef struct {
-    BGZF *fp;
+    samFile *fp;
+    sam_hdr_t *hdr;
     hts_itr_t *itr;
     int beg, end;
 } aux_t;
 
 static int read_bam(void *data, bam1_t *b) {
     aux_t *aux = (aux_t *)data;
-    int ret = aux->itr ? bam_itr_next(aux->fp, aux->itr, b) : bam_read1(aux->fp, b);
+    int ret = aux->itr ? sam_itr_next(aux->fp, aux->itr, b) : sam_read1(aux->fp, aux->hdr, b);
     return ret;
 }
 
 KHASH_INIT(qn, char *, int, 1, kh_str_hash_func, kh_str_hash_equal)
-
-/* read-filter memo: (ref_start, qname) -> pass/fail, so read_fails() is
- * computed once per read instead of once per pileup position. */
-typedef struct { int64_t pos; const char *qn; } rf_key;
-static inline khint_t rf_hash(rf_key k) {
-    return kh_int64_hash_func(k.pos) ^ kh_str_hash_func(k.qn);
-}
-static inline int rf_equal(rf_key a, rf_key b) {
-    return a.pos == b.pos && strcmp(a.qn, b.qn) == 0;
-}
-KHASH_INIT(rfc, rf_key, int, 1, rf_hash, rf_equal)
-#define RF_CAP (1 << 15)
 
 /* -e read-constant memo for the pileup engine, keyed by the pileup slot
  * pointer (p->b): htslib keeps the same bam1_t for one read across all the
  * positions it covers, so an int-keyed slot hash lets us evaluate a
  * read-constant expression once per read and reuse it for every appearance.
  * A pos/qlen/qname verify guards against a recycled buffer now holding a
- * different read.  Unlike the RF_CAP-based cache this survives deep hotspots
- * (no global eviction: each mplp slot holds at most one read at a time). */
+ * different read.  Each mplp slot holds at most one read at a time. */
 typedef struct { int64_t pos; int qlen; char *qn; int slot; } expr_cc_t;
 static inline khint_t pex_hash(uintptr_t p) {
     return (khint_t)(p >> 3) ^ ((khint_t)(p >> 13) & 0x0ff);
@@ -177,30 +154,32 @@ typedef struct {
     char *motif_buf;      /* reference-forward motif window (per-site) */
     char *motif_rc_buf;   /* reverse-complemented copy for the minus-strand row */
     char *chr_seq; int chr_len, last_tid;
-    BGZF *fp; hts_idx_t *idx; faidx_t *fai;
+    samFile *fp; hts_idx_t *idx; faidx_t *fai;
+    htsThreadPool *tpool;   /* shared CRAM decode pool (NULL = no pool) */
     void *inc_bed, *exc_bed;
     cm_expr *expr;   /* Lua -e / -p filters (NULL when none) */
-    khash_t(rfc) *rfc; /* read_fails memo (pileup engine) */
     khash_t(pex) *pexc; /* -e read-constant memo keyed by pileup slot (pileup) */
 } worker_t;
 
 static void worker_init(worker_t *w, const char *bam, const char *fa, int pad,
                         const char *bedfile, const char *exclude,
                         const char *read_expr, const char *pile_expr,
-                        const char *output_expr) {
+                        const char *output_expr, htsThreadPool *tpool) {
     w->kh = kh_init(qn);
     w->sel = w->mapq_a = w->r1_a = w->q_a = w->g_a = NULL;
     w->sel_cap = 0;
     w->motif_buf = (char *)malloc(2 * pad + 2);
     w->motif_rc_buf = (char *)malloc(2 * pad + 2);
     w->chr_seq = NULL; w->chr_len = 0; w->last_tid = -1;
-    w->fp = bgzf_open(bam, "r");
-    w->idx = bam_index_load(bam);
+    w->fp = sam_open(bam, "r");
+    hts_set_fai_filename(w->fp, fa);
+    if (tpool) hts_set_thread_pool(w->fp, tpool);   /* shared CRAM decode pool */
+    hts_set_threads(w->fp, 2);   /* CRAM decode needs the reference */
+    w->idx = sam_index_load(w->fp, bam);
     w->fai = fai_load(fa);
     w->inc_bed = bedfile ? bed_read(bedfile) : NULL;
     w->exc_bed = exclude ? bed_read(exclude) : NULL;
     w->expr = cm_expr_new(read_expr, pile_expr, output_expr);
-    w->rfc = kh_init(rfc);
     w->pexc = kh_init(pex);
 }
 
@@ -218,42 +197,13 @@ static void worker_free(worker_t *w) {
     if (w->inc_bed) bed_destroy(w->inc_bed);
     if (w->fai) fai_destroy(w->fai);
     if (w->idx) hts_idx_destroy(w->idx);
-    if (w->fp) bgzf_close(w->fp);
+    if (w->fp) sam_close(w->fp);
     cm_expr_free(w->expr);
-    if (w->rfc) {
-        for (khint_t k = kh_begin(w->rfc); k != kh_end(w->rfc); ++k)
-            if (kh_exist(w->rfc, k)) free((void *)(uintptr_t)kh_key(w->rfc, k).qn);
-        kh_destroy(rfc, w->rfc);
-    }
     if (w->pexc) {
         for (khint_t k = kh_begin(w->pexc); k != kh_end(w->pexc); ++k)
             if (kh_exist(w->pexc, k)) free(kh_val(w->pexc, k).qn);
         kh_destroy(pex, w->pexc);
     }
-}
-
-/* read_fails() memoized by (ref_start, qname).  Only used when an aux-tag
- * filter (NS / Zf / Yf) is active -- otherwise read_fails() is cheap and the
- * cache would only add overhead.  The cached value is exactly read_fails() for
- * that same read, so input->output semantics are unchanged. */
-#define read_fails_cached(w, cfg, b) \
-    (((cfg)->max_sub < 0 && (cfg)->max_unc < 0 && (cfg)->min_con < 0) ? \
-        read_fails(cfg, b) : _read_fails_cached(w, cfg, b))
-
-static int _read_fails_cached(worker_t *w, const cm_config *cfg, const bam1_t *b) {
-    rf_key key = { b->core.pos, bam_get_qname(b) };
-    khint_t k = kh_get(rfc, w->rfc, key);
-    if (k != kh_end(w->rfc)) return kh_val(w->rfc, k);
-    int fails = read_fails(cfg, b);
-    if (kh_size(w->rfc) >= RF_CAP) {
-        for (khint_t it = kh_begin(w->rfc); it != kh_end(w->rfc); ++it)
-            if (kh_exist(w->rfc, it)) free((void *)(uintptr_t)kh_key(w->rfc, it).qn);
-        kh_clear(rfc, w->rfc);
-    }
-    int ret; k = kh_put(rfc, w->rfc, key, &ret);
-    if (ret) kh_key(w->rfc, k).qn = strdup(bam_get_qname(b));
-    kh_val(w->rfc, k) = fails;
-    return fails;
 }
 
 /* -e read filter, memoized by (ref_start, qname) WHEN the expression is
@@ -370,33 +320,57 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
         /* No ref/mut targets in the template path (unified counter): the
          * derived u/m/o fields stay off for template rows. */
         int refi = -1, muti = -1;
-        /* Per-strand rows: counts are this strand only, per category slot. */
-        for (int s = 0; s < 2; ++s) {
-            if (s == 0 && !emit_plus) continue;
-            if (s == 1 && !emit_minus) continue;
-            /* target_base: emit only the strand whose reference base (on that
-             * strand) equals the target.  For m6A (target A) this keeps the
-             * '+' strand A-site (genomic ref A) and the '-' strand A-site
-             * (genomic ref T), dropping the spurious complement-strand rows. */
-            if (cfg->target_base >= 0) {
-                char sref = (s == 0) ? ref_ch : rc_nt(ref_ch);
-                if (base_to_index((char)sref) != cfg->target_base) continue;
+        if (cfg->strandless) {
+            /* Strandless: combine both strands into one row (parity with the
+             * built-in composition format).  The motif is reference-forward
+             * (no reverse complement needed). */
+            int cnt[CM_CAT_MAX][5] = {0};
+            int ins = 0, del = 0, rs = 0, fl = 0;
+            if (emit_plus) {
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) cnt[c][b] += site->cnt[0][c][b];
+                ins += site->ins[0]; del += site->del[0]; rs += site->refskip[0]; fl += site->fail[0];
             }
-            int sdepth = site->ins[s] + site->del[s] + site->refskip[s] + site->fail[s];
+            if (emit_minus) {
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) cnt[c][b] += site->cnt[1][c][b];
+                ins += site->ins[1]; del += site->del[1]; rs += site->refskip[1]; fl += site->fail[1];
+            }
+            int sdepth = ins + del + rs + fl;
             for (int c = 0; c < CM_CAT_MAX; ++c)
-                for (int b = 0; b < 5; ++b) sdepth += site->cnt[s][c][b];
-            if (sdepth == 0) continue;   /* match the built-in formats: skip empty strands */
-            const char *mot_s = motif;
-            if (motif && s == 1) {       /* minus strand: reverse complement */
-                int mlen = cfg->pad * 2 + 1;
-                for (int k2 = 0; k2 < mlen; ++k2)
-                    w->motif_rc_buf[k2] = rc_nt(motif[mlen - 1 - k2]);
-                w->motif_rc_buf[mlen] = 0;
-                mot_s = w->motif_rc_buf;
+                for (int b = 0; b < 5; ++b) sdepth += cnt[c][b];
+            if (sdepth == 0) return;
+            cm_expr_output(w->expr, hdr->target_name[tid], pos, ref_ch, motif,
+                           cnt, ins, del, rs, fl, refi, muti, -1, fp);
+        } else {
+            /* Per-strand rows: counts are this strand only, per category slot. */
+            for (int s = 0; s < 2; ++s) {
+                if (s == 0 && !emit_plus) continue;
+                if (s == 1 && !emit_minus) continue;
+                /* target_base: emit only the strand whose reference base (on that
+                 * strand) equals the target.  For m6A (target A) this keeps the
+                 * '+' strand A-site (genomic ref A) and the '-' strand A-site
+                 * (genomic ref T), dropping the spurious complement-strand rows. */
+                if (cfg->target_base >= 0) {
+                    char sref = (s == 0) ? ref_ch : rc_nt(ref_ch);
+                    if (base_to_index((char)sref) != cfg->target_base) continue;
+                }
+                int sdepth = site->ins[s] + site->del[s] + site->refskip[s] + site->fail[s];
+                for (int c = 0; c < CM_CAT_MAX; ++c)
+                    for (int b = 0; b < 5; ++b) sdepth += site->cnt[s][c][b];
+                if (sdepth == 0) continue;   /* match the built-in formats: skip empty strands */
+                const char *mot_s = motif;
+                if (motif && s == 1) {       /* minus strand: reverse complement */
+                    int mlen = cfg->pad * 2 + 1;
+                    for (int k2 = 0; k2 < mlen; ++k2)
+                        w->motif_rc_buf[k2] = rc_nt(motif[mlen - 1 - k2]);
+                    w->motif_rc_buf[mlen] = 0;
+                    mot_s = w->motif_rc_buf;
+                }
+                cm_expr_output(w->expr, hdr->target_name[tid], pos, ref_ch, mot_s,
+                               site->cnt[s], site->ins[s], site->del[s],
+                               site->refskip[s], site->fail[s], refi, muti, s, fp);
             }
-            cm_expr_output(w->expr, hdr->target_name[tid], pos, ref_ch, mot_s,
-                           site->cnt[s], site->ins[s], site->del[s],
-                           site->refskip[s], site->fail[s], refi, muti, s, fp);
         }
         return;
     }
@@ -411,7 +385,6 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
                 int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
                 int t_ins = site->ins[s], t_del = site->del[s], t_rs = site->refskip[s], t_fl = site->fail[s];
                 if (dep + t_rs + t_del + t_ins + t_fl == 0) continue;
-                if (cfg->min_depth > 0 && dep < cfg->min_depth) continue;
                 fprintf(fp, "%s\t%d\t%c\t%c\t%d\t%d\t%d\t%d\t%d\t%d",
                         hdr->target_name[tid], (int)pos + 1, s ? '-' : '+', ref_ch, dep,
                         cnt[0], cnt[1], cnt[2], cnt[3], cnt[4]);
@@ -432,7 +405,6 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
             }
             int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
             if (dep + t_rs + t_del + t_ins + t_fl == 0) return;
-            if (cfg->min_depth > 0 && dep < cfg->min_depth) return;
             fprintf(fp, "%s\t%d\t%c\t%d\t%d\t%d\t%d\t%d\t%d",
                     hdr->target_name[tid], (int)pos + 1, ref_ch, dep, cnt[0], cnt[1], cnt[2], cnt[3], cnt[4]);
             if (cfg->count_indels) fprintf(fp, "\t%d\t%d\t%d\t%d", t_ins, t_del, t_rs, t_fl);
@@ -448,16 +420,14 @@ static void emit_site(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *f
                 for (int b = 0; b < 5; ++b) cnt[b] += site->cnt[1][c][b];
         int dep = cnt[0]+cnt[1]+cnt[2]+cnt[3]+cnt[4];
         if (dep <= 0) return;
-        if (cfg->min_depth > 0 && dep < cfg->min_depth) return;
         int refi = base_to_index(ref_ch), ref_n = cnt[refi], best = -1, bn = 0;
         for (int i = 0; i < 4; ++i) if (i != refi && cnt[i] > bn) { bn = cnt[i]; best = i; }
         if (cfg->vcf) {
-            if (best < 0 || bn < cfg->min_allele_support) return;
+            if (best < 0) return;
             const char *alts = "ACGT";
             fprintf(fp, "%s\t%d\t.\t%c\t%c\t.\tPASS\t.\tGT:AD\t0/1:%d,%d\n",
                     hdr->target_name[tid], (int)pos + 1, ref_ch, alts[best], ref_n, bn);
         } else {
-            if (bn < cfg->min_allele_support) { best = -1; bn = 0; }
             fprintf(fp, "%s\t%d\t%c\t%d\t%d\t%c\t%d\n",
                     hdr->target_name[tid], (int)pos + 1, ref_ch, dep, ref_n,
                     best < 0 ? '.' : "ACGT"[best], best < 0 ? 0 : bn);
@@ -516,9 +486,9 @@ static void load_chr_seq(worker_t *w, bam_hdr_t *hdr, int tid) {
 /* Count one interval [beg,end) of `tid` and write rows to fp. */
 static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FILE *fp, int tid, int beg, int end) {
     aux_t aux;
-    aux.fp = w->fp;
+    aux.fp = w->fp; aux.hdr = hdr;
     aux.beg = beg; aux.end = end;
-    aux.itr = w->idx ? bam_itr_queryi(w->idx, tid, beg, end) : NULL;
+    aux.itr = w->idx ? sam_itr_queryi(w->idx, tid, beg, end) : NULL;
 
     int *n_plp = (int *)calloc(1, sizeof(int));
     const bam_pileup1_t **plp = (const bam_pileup1_t **)calloc(1, sizeof(void *));
@@ -557,14 +527,11 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             int s = bio_strand(b);
             if (cfg->strand_process == CM_STRAND_FORWARD && s != 0) continue;
             if (cfg->strand_process == CM_STRAND_REVERSE && s != 1) continue;
-            if (read_fails_cached(w, cfg, b)) { site.fail[s]++; continue; }
+            if (read_fails(cfg, b)) { site.fail[s]++; continue; }
             if (p->is_refskip) { site.refskip[s]++; continue; }
             if (p->is_del) { site.del[s]++; continue; }
             if (p->qpos < 0 || p->qpos >= b->core.l_qseq) continue;
-            int qpos = p->qpos, qlen = b->core.l_qseq;
-            if (s == 0) { if (qpos < cfg->trim_fragment_start || qlen - qpos <= cfg->trim_fragment_end) continue; }
-            else { if (qpos < cfg->trim_fragment_end || qlen - qpos <= cfg->trim_fragment_start) continue; }
-            if (read_trim_skip(b, qpos, cfg->trim_r1_end, cfg->trim_r2_start)) continue;
+            int qpos = p->qpos;
             /* -e read router: returns the category slot (-1 = drop).  Evaluated
              * once per read when read-constant via the exprc memo, else per
              * aligned base (the same spot as the Python engine). */
@@ -678,24 +645,43 @@ KHASH_INIT(posi, khint64_t, int, 1, posi_hash, kh_int64_hash_equal)
 /* winner of a (pos,qname) dedup bucket */
 typedef struct { int mapq, r1, qual, strand, base, slot; } rw_w;
 
-/* growable map pos -> site_t (one entry per visited reference position) */
+/* growable map pos -> site_t (one entry per visited reference position).
+ * When the fast-dna fast path is active, `arr` is a dense fixed array over
+ * [arr_beg, arr_beg+arr_len) and sm_get() is an O(1) index instead of a hash
+ * lookup; otherwise the hash map is used. */
 typedef struct {
     khash_t(posi) *pm;
     int64_t *spos;
     site_t *st;
     int n, cap;
+    site_t *arr; int64_t arr_beg; int arr_len;   /* fast-dna dense array */
 } sitemap_t;
 
-static void sm_init(sitemap_t *m) {
-    m->pm = kh_init(posi); m->spos = NULL; m->st = NULL; m->n = m->cap = 0;
+static void sm_init(sitemap_t *m, int fast_dna, int64_t beg, int64_t end) {
+    m->pm = NULL; m->spos = NULL; m->st = NULL; m->n = m->cap = 0;
+    m->arr = NULL; m->arr_beg = beg; m->arr_len = 0;
+    if (fast_dna && end > beg) {
+        m->arr_len = (int)(end - beg);
+        m->arr = (site_t *)calloc((size_t)m->arr_len, sizeof(site_t));
+        m->arr_beg = beg;
+    } else {
+        m->pm = kh_init(posi);
+    }
 }
 static void sm_free(sitemap_t *m) {
-    kh_destroy(posi, m->pm); free(m->spos); free(m->st);
+    if (m->pm) kh_destroy(posi, m->pm);
+    free(m->spos); free(m->st);
+    if (m->arr) free(m->arr);
     memset(m, 0, sizeof(*m));
 }
 /* NOTE: the returned pointer is only valid until the next sm_get() (a later
  * insert may realloc), so it must be used immediately and never retained. */
 static site_t *sm_get(sitemap_t *m, int64_t pos) {
+    if (m->arr) {
+        int64_t i = pos - m->arr_beg;
+        if (i >= 0 && i < m->arr_len) return &m->arr[i];
+        return NULL;   /* out of region: caller should not hit this */
+    }
     khint_t k = kh_get(posi, m->pm, pos);
     if (k != kh_end(m->pm)) return &m->st[kh_val(m->pm, k)];
     int ret; k = kh_put(posi, m->pm, pos, &ret);
@@ -722,6 +708,33 @@ static int cmp_site_ord(const void *a, const void *b) {
  * jumps straight to the (sorted) target positions.  Both funnel into
  * rw_add_base(), so dedup/quality decisions are byte-identical. */
 
+/* Insert/update one (pos,qid) winner in the posq dedup hash.  Shared by
+ * rw_add_base() and the duplicate-qname promotion path (frag_ovl_promote). */
+static rw_w *posq_add(khash_t(posq) *h, rw_w *wins, int *wins_cap, int *wins_n,
+                      int64_t ref_pos, int qid, int mapq, int r1, int qual,
+                      int strand, int base, int slot) {
+    posq_key key = { ref_pos, qid };
+    int r;
+    khint_t kh = kh_put(posq, h, key, &r);
+    if (r) {   /* new (pos,qname) */
+        if (*wins_n == *wins_cap) {
+            *wins_cap = *wins_cap ? *wins_cap * 2 : 64;
+            wins = (rw_w *)realloc(wins, (size_t)*wins_cap * sizeof(rw_w));
+        }
+        int idx = (*wins_n)++;
+        wins[idx].mapq = mapq; wins[idx].r1 = r1; wins[idx].qual = qual;
+        wins[idx].strand = strand; wins[idx].base = base; wins[idx].slot = slot;
+        kh_val(h, kh) = idx;
+    } else {
+        int j = kh_val(h, kh);
+        if (better(mapq, r1, qual, wins[j].mapq, wins[j].r1, wins[j].qual)) {
+            wins[j].mapq = mapq; wins[j].r1 = r1; wins[j].qual = qual;
+            wins[j].strand = strand; wins[j].base = base; wins[j].slot = slot;
+        }
+    }
+    return wins;
+}
+
 /* Add one matched base to the (pos,qname) dedup table.  Applies the mutation
  * target gate (skipped when `already_target`), trim (is_internal), the -e
  * filter and the (mapq,read1,qual) preference.  When `direct` is set the base
@@ -736,12 +749,6 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
                          khash_t(posq) *h, rw_w *wins, int *wins_cap, int *wins_n) {
     uint32_t qlen = b->core.l_qseq;
     if (qpos >= qlen) return wins;
-    if (s == 0) {
-        if ((int)qpos < cfg->trim_fragment_start || (int)qlen - (int)qpos <= cfg->trim_fragment_end) return wins;
-    } else {
-        if ((int)qpos < cfg->trim_fragment_end || (int)qlen - (int)qpos <= cfg->trim_fragment_start) return wins;
-    }
-    if (read_trim_skip(b, (int)qpos, cfg->trim_r1_end, cfg->trim_r2_start)) return wins;
     /* -e router: category slot (-1 = drop).  Read-constant -e is applied once
      * per read by the caller (see count_interval_readwalk); here we route the
      * per-base (non-read-constant) case only, which is what a bq/qpos-based
@@ -769,23 +776,123 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
     }
     int mapq = (int)b->core.qual;
     int r1 = (b->core.flag & BAM_FREAD1) ? 1 : 0;
-    posq_key key = { ref_pos, qid };
-    int r;
-    khint_t kh = kh_put(posq, h, key, &r);
-    if (r) {   /* new (pos,qname) */
-        if (*wins_n == *wins_cap) {
-            *wins_cap = *wins_cap ? *wins_cap * 2 : 64;
-            wins = (rw_w *)realloc(wins, (size_t)*wins_cap * sizeof(rw_w));
+    return posq_add(h, wins, wins_cap, wins_n, ref_pos, qid, mapq, r1, qual, s, base_i, rslot);
+}
+
+/* Per-fragment overlap buffer for fast-dna mode.
+ *
+ * In fast-dna mode the global (pos,qname) dedup hash becomes the bottleneck
+ * at deep coverage (tens to hundreds of millions of inserts, dominated by
+ * cache misses).  For paired reads whose mates overlap we instead buffer the
+ * overlap bases per fragment and resolve the winner once both mates are seen.
+ * The overlap reference interval is contiguous, so we store winners by offset
+ * inside that interval -- no hash table on the per-base hot path.
+ *
+ * For a fragment with read1 at pos1 and read2 at pos2, the outer template
+ * length is isize = pos2 + qlen - pos1.  When isize < 2*qlen the mates overlap
+ * on reference [pos2, pos1+qlen), length L = 2*qlen - isize.  Both mates map
+ * their overlap bases to the same L reference positions, so a per-offset
+ * comparison picks the (mapq,read1,qual) winner exactly like the posq path. */
+typedef struct {
+    int seen;              /* bitmask: 1=read1 seen, 2=read2 seen */
+    int n_read;            /* reads seen with this qname (detect >2 duplicates) */
+    int L;                 /* overlap length on reference */
+    int64_t ref_start;     /* 0-based start of overlap on reference */
+    uint8_t *has[2];       /* has[0]=read1, has[1]=read2 */
+    rw_w *win[2];          /* winner candidate per offset per mate */
+} frag_ovl_t;
+
+static frag_ovl_t *frag_ovl_new(int L, int64_t ref_start) {
+    frag_ovl_t *f = (frag_ovl_t *)calloc(1, sizeof(frag_ovl_t));
+    if (L < 1) L = 1;
+    f->L = L; f->ref_start = ref_start; f->seen = 0;
+    for (int m = 0; m < 2; ++m) {
+        f->has[m] = (uint8_t *)calloc((size_t)L, sizeof(uint8_t));
+        f->win[m] = (rw_w *)malloc((size_t)L * sizeof(rw_w));
+    }
+    return f;
+}
+static void frag_ovl_free(frag_ovl_t *f) {
+    if (!f) return;
+    for (int m = 0; m < 2; ++m) { free(f->has[m]); free(f->win[m]); }
+    free(f);
+}
+/* Ensure the buffer covers [ref_start, ref_start+L).  Expand and shift if the
+ * second mate reports a slightly different interval (can happen with clipping). */
+static void frag_ovl_ensure(frag_ovl_t *f, int L2, int64_t ref_start2) {
+    int64_t end1 = f->ref_start + f->L;
+    int64_t end2 = ref_start2 + L2;
+    int64_t new_start = f->ref_start < ref_start2 ? f->ref_start : ref_start2;
+    int64_t new_end = end1 > end2 ? end1 : end2;
+    int new_L = (int)(new_end - new_start);
+    if (new_L <= f->L && new_start == f->ref_start) return;
+    for (int m = 0; m < 2; ++m) {
+        uint8_t *nh = (uint8_t *)calloc((size_t)new_L, sizeof(uint8_t));
+        rw_w *nw = (rw_w *)malloc((size_t)new_L * sizeof(rw_w));
+        if (f->has[m]) {
+            int off = (int)(f->ref_start - new_start);
+            memcpy(nh + off, f->has[m], (size_t)f->L * sizeof(uint8_t));
+            memcpy(nw + off, f->win[m], (size_t)f->L * sizeof(rw_w));
+            free(f->has[m]); free(f->win[m]);
         }
-        int idx = (*wins_n)++;
-        wins[idx].mapq = mapq; wins[idx].r1 = r1; wins[idx].qual = qual;
-        wins[idx].strand = s; wins[idx].base = base_i; wins[idx].slot = rslot;
-        kh_val(h, kh) = idx;
-    } else {
-        int j = kh_val(h, kh);
-        if (better(mapq, r1, qual, wins[j].mapq, wins[j].r1, wins[j].qual)) {
-            wins[j].mapq = mapq; wins[j].r1 = r1; wins[j].qual = qual;
-            wins[j].strand = s; wins[j].base = base_i; wins[j].slot = rslot;
+        f->has[m] = nh; f->win[m] = nw;
+    }
+    f->L = new_L; f->ref_start = new_start;
+}
+static void frag_ovl_store(frag_ovl_t *f, int mate, int64_t ref_pos,
+                           int mapq, int r1, int qual, int strand, int base, int slot) {
+    int off = (int)(ref_pos - f->ref_start);
+    if (off < 0 || off >= f->L) {
+        /* Clipping/indel can shift the actual aligned overlap relative to the
+         * geometry-derived interval; expand (and shift) the buffer so every
+         * overlap base lands inside it. */
+        frag_ovl_ensure(f, 1, ref_pos);
+        off = (int)(ref_pos - f->ref_start);
+        if (off < 0 || off >= f->L) return;
+    }
+    f->has[mate][off] = 1;
+    f->win[mate][off].mapq = mapq;
+    f->win[mate][off].r1 = r1;
+    f->win[mate][off].qual = qual;
+    f->win[mate][off].strand = strand;
+    f->win[mate][off].base = base;
+    f->win[mate][off].slot = slot;
+}
+static void frag_ovl_flush(frag_ovl_t *f, sitemap_t *sm, int64_t beg, int64_t end) {
+    for (int off = 0; off < f->L; ++off) {
+        int64_t pos = f->ref_start + off;
+        if (pos < beg || pos >= end) continue;
+        rw_w *w = NULL;
+        if (f->has[0][off] && f->has[1][off]) {
+            rw_w *a = &f->win[0][off], *b = &f->win[1][off];
+            w = better(a->mapq, a->r1, a->qual, b->mapq, b->r1, b->qual) ? a : b;
+        } else if (f->has[0][off]) {
+            w = &f->win[0][off];
+        } else if (f->has[1][off]) {
+            w = &f->win[1][off];
+        }
+        if (w) {
+            site_t *st = sm_get(sm, pos);
+            if (st) st->cnt[w->strand][w->slot][w->base]++;
+        }
+    }
+}
+KHASH_INIT(fovl, int, frag_ovl_t *, 1, kh_int_hash_func, kh_int_hash_equal)
+KHASH_INIT(dupeset, int, int, 0, kh_int_hash_func, kh_int_hash_equal)
+
+/* A qname appearing >2 times (split/duplicate alignments) cannot be handled by
+ * the two-slot per-fragment buffer; migrate its buffered bases into the global
+ * posq hash so all reads with that qname dedup against each other exactly as
+ * the original posq path would.  Returns the (possibly reallocated) wins. */
+static rw_w *frag_ovl_promote(frag_ovl_t *f, int qid, khash_t(posq) *h,
+                              rw_w *wins, int *wins_cap, int *wins_n) {
+    for (int mate = 0; mate < 2; ++mate) {
+        for (int off = 0; off < f->L; ++off) {
+            if (!f->has[mate][off]) continue;
+            int64_t ref_pos = f->ref_start + off;
+            rw_w *w = &f->win[mate][off];
+            wins = posq_add(h, wins, wins_cap, wins_n, ref_pos, qid,
+                            w->mapq, w->r1, w->qual, w->strand, w->base, w->slot);
         }
     }
     return wins;
@@ -794,20 +901,32 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
 static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr,
                                     FILE *fp, int tid, int beg, int end) {
     aux_t aux;
-    aux.fp = w->fp; aux.beg = beg; aux.end = end;
-    aux.itr = w->idx ? bam_itr_queryi(w->idx, tid, beg, end) : NULL;
+    aux.fp = w->fp; aux.hdr = hdr;
+    aux.beg = beg; aux.end = end;
+    aux.itr = w->idx ? sam_itr_queryi(w->idx, tid, beg, end) : NULL;
 
     if (w->last_tid != tid) load_chr_seq(w, hdr, tid);
 
     khash_t(posq) *h = kh_init(posq);
     khash_t(qn2id) *qnids = kh_init(qn2id);
+    khash_t(fovl) *fovl_h = kh_init(fovl);
+    khash_t(dupeset) *dupe_qids = kh_init(dupeset);
     int qname_n = 0;
     rw_w *wins = NULL; int wins_cap = 0, wins_n = 0;
-    sitemap_t sm; sm_init(&sm);
+    /* Dense fixed-array sitemap (O(1) index) is the default for strandless
+     * counting.  It supports the -e read filter: a simple "bq >= N" filter is
+     * applied as a fast integer check, any other -e expression is evaluated
+     * per base via the Lua router.  The general hash-map sitemap is used only
+     * when the counting needs motif/BED/target/indel features. */
+    int fast_dna = cfg->strandless &&
+                   !cfg->pile_expr && cfg->pad == 0 && !cfg->bedfile &&
+                   !cfg->exclude && cfg->target_base < 0 && !cfg->count_indels;
+    sitemap_t sm; sm_init(&sm, fast_dna, beg, end);
+    if (cfg->verbose && fast_dna) fprintf(stderr, "[countmut] fast-dna region %d:%d-%d\n", tid, beg, end);
 
     bam1_t *b = bam_init1();
     int ret;
-    while ((ret = (aux.itr ? bam_itr_next(aux.fp, aux.itr, b) : bam_read1(aux.fp, b))) >= 0) {
+    while ((ret = (aux.itr ? sam_itr_next(aux.fp, aux.itr, b) : sam_read1(aux.fp, aux.hdr, b))) >= 0) {
         int s = bio_strand(b);
         if (cfg->strand_process == CM_STRAND_FORWARD && s != 0) continue;
         if (cfg->strand_process == CM_STRAND_REVERSE && s != 1) continue;
@@ -832,15 +951,6 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
 
         uint32_t qlen = b->core.l_qseq;
         if (qlen == 0) continue;
-        const char *qnbuf = bam_get_qname(b);
-        khint_t qk = kh_get(qn2id, qnids, qnbuf);
-        int qid;
-        if (qk == kh_end(qnids)) {
-            int r; char *cp = strdup(qnbuf); qk = kh_put(qn2id, qnids, cp, &r);
-            qid = qname_n++; kh_val(qnids, qk) = qid;
-        } else {
-            qid = kh_val(qnids, qk);
-        }
         const uint32_t *cig = bam_get_cigar(b);
 
         /* Solo-vs-overlap for the overlap dedup: a base is "direct" (counted
@@ -873,6 +983,33 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         }
         /* else (paired but mate position unknown: mpos<0/mtid<0) ovl stays -1
          * -> every base goes through the hash = exact (never direct) */
+        /* fast-dna overlap geometry (pre-compute once per read). */
+        int L_ovl = 0;
+        int64_t ref_start_ovl = 0;
+        if (fast_dna && ovl == 1) {
+            if (b->core.flag & BAM_FREAD1) {
+                L_ovl = (int)qlen - olo;
+                ref_start_ovl = (int64_t)b->core.pos + olo;
+            } else {
+                L_ovl = ohi;
+                ref_start_ovl = (int64_t)b->core.pos;
+            }
+            if (L_ovl < 1) L_ovl = 1;
+        }
+        /* qname -> id: only needed for the (pos,qname) overlap dedup hash.
+         * In the fast-dna path a non-overlapping read (ovl==0) is counted
+         * directly into the dense array, so we skip the strdup/hash entirely. */
+        int qid = 0;
+        if (!(fast_dna && ovl == 0)) {
+            const char *qnbuf = bam_get_qname(b);
+            khint_t qk = kh_get(qn2id, qnids, qnbuf);
+            if (qk == kh_end(qnids)) {
+                int r; char *cp = strdup(qnbuf); qk = kh_put(qn2id, qnids, cp, &r);
+                qid = qname_n++; kh_val(qnids, qk) = qid;
+            } else {
+                qid = kh_val(qnids, qk);
+            }
+        }
         /* read-constant -e filter: evaluate ONCE per read (not per base) and
          * skip the whole read when it fails.  rw_add_base() then skips the
          * per-base -e call for these (its decision is already known). */
@@ -892,14 +1029,121 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                 int op = (int)bam_cigar_op_p(&cig[i]); int len = (int)bam_cigar_oplen_p(&cig[i]);
                 switch (op) {
                 case 0: case 7: case 8: /* M, =, X -- matched bases */
-                    for (int k = 0; k < len; ++k) {
-                        int64_t ref_pos = rcur + k;
-                        if (ref_pos < beg || ref_pos >= end) continue;
-                        uint32_t qpos = qcur + (uint32_t)k;
-                        if (qpos >= qlen) break;
-                        wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
-                                           qid, 0, RW_DIRECT(qpos), &sm,
-                                           h, wins, &wins_cap, &wins_n);
+                    if (fast_dna && ovl == 0) {
+                        /* fast-dna inline path: ovl==0 so every base is direct,
+                         * count straight into the dense array (O(1) index), no
+                         * rw_add_base call / no (pos,qname) dedup hash. */
+                        for (int k = 0; k < len; ++k) {
+                            int64_t ref_pos = rcur + k;
+                            if (ref_pos < beg || ref_pos >= end) continue;
+                            uint32_t qpos = qcur + (uint32_t)k;
+                            if (qpos >= qlen) break;
+                            uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
+                            int base_i = nt16_index(nt);
+                            if (s == 1 && base_i < 4) base_i = 3 - base_i;
+                            int cat = 0;
+                            if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
+                                cat = cm_expr_route(w->expr, b, hdr->target_name[tid],
+                                    (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets) ? hdr->target_name[b->core.mtid] : "",
+                                    (int)qpos, s ? -1 : 1,
+                                    (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N');
+                                if (cat < 0) continue;
+                            }
+                            site_t *st = sm_get(&sm, ref_pos);
+                            if (st) st->cnt[s][cat][base_i]++;
+                        }
+                    } else if (fast_dna && ovl == 1) {
+                        /* fast-dna overlap path: buffer per-fragment, no posq hash. */
+                        int mate = (b->core.flag & BAM_FREAD2) ? 1 : 0;  /* 0=R1, 1=R2 */
+                        int mate_bit = 1 << mate;
+                        int mapq = (int)b->core.qual;
+                        int r1f = (b->core.flag & BAM_FREAD1) ? 1 : 0;
+                        khint_t dk = kh_get(dupeset, dupe_qids, qid);
+                        if (dk != kh_end(dupe_qids)) {
+                            /* duplicate qname: route through posq so all reads
+                             * with this qname dedup against each other. */
+                            for (int k = 0; k < len; ++k) {
+                                int64_t ref_pos = rcur + k;
+                                if (ref_pos < beg || ref_pos >= end) continue;
+                                uint32_t qpos = qcur + (uint32_t)k;
+                                if (qpos >= qlen) break;
+                                wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
+                                                   qid, 0, RW_DIRECT(qpos), &sm,
+                                                   h, wins, &wins_cap, &wins_n);
+                            }
+                        } else {
+                            khint_t fk = kh_get(fovl, fovl_h, qid);
+                            frag_ovl_t *fo;
+                            int fnew;
+                            if (fk == kh_end(fovl_h)) {
+                                fk = kh_put(fovl, fovl_h, qid, &fnew);
+                                fo = frag_ovl_new(L_ovl, ref_start_ovl);
+                                fo->n_read = 1;
+                                kh_val(fovl_h, fk) = fo;
+                            } else {
+                                fo = kh_val(fovl_h, fk);
+                                fo->n_read++;
+                            }
+                            if (fo->n_read > 2) {
+                                /* third+ read with this qname: promote to posq. */
+                                wins = frag_ovl_promote(fo, qid, h, wins, &wins_cap, &wins_n);
+                                kh_del(fovl, fovl_h, fk);
+                                frag_ovl_free(fo);
+                                int r; kh_put(dupeset, dupe_qids, qid, &r);
+                                for (int k = 0; k < len; ++k) {
+                                    int64_t ref_pos = rcur + k;
+                                    if (ref_pos < beg || ref_pos >= end) continue;
+                                    uint32_t qpos = qcur + (uint32_t)k;
+                                    if (qpos >= qlen) break;
+                                    wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
+                                                       qid, 0, RW_DIRECT(qpos), &sm,
+                                                       h, wins, &wins_cap, &wins_n);
+                                }
+                            } else {
+                                frag_ovl_ensure(fo, L_ovl, ref_start_ovl);
+                                fo->seen |= mate_bit;
+                                for (int k = 0; k < len; ++k) {
+                                    int64_t ref_pos = rcur + k;
+                                    if (ref_pos < beg || ref_pos >= end) continue;
+                                    uint32_t qpos = qcur + (uint32_t)k;
+                                    if (qpos >= qlen) break;
+                                    int in_ovl = ((int)qpos >= olo && (int)qpos < ohi);
+                                    uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
+                                    int base_i = nt16_index(nt);
+                                    if (s == 1 && base_i < 4) base_i = 3 - base_i;
+                                    int cat = 0;
+                                    if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
+                                        cat = cm_expr_route(w->expr, b, hdr->target_name[tid],
+                                            (b->core.mtid >= 0 && b->core.mtid < hdr->n_targets) ? hdr->target_name[b->core.mtid] : "",
+                                            (int)qpos, s ? -1 : 1,
+                                            (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N');
+                                        if (cat < 0) continue;
+                                    }
+                                    if (!in_ovl) {
+                                        site_t *st = sm_get(&sm, ref_pos);
+                                        if (st) st->cnt[s][cat][base_i]++;
+                                    } else {
+                                        int qual = (int)bam_get_qual(b)[qpos];
+                                        frag_ovl_store(fo, mate, ref_pos, mapq, r1f, qual, s, base_i, cat);
+                                    }
+                                }
+                                if (fo->seen == 3) {
+                                    frag_ovl_flush(fo, &sm, beg, end);
+                                    kh_del(fovl, fovl_h, fk);
+                                    frag_ovl_free(fo);
+                                }
+                            }
+                        }
+                    } else {
+                        for (int k = 0; k < len; ++k) {
+                            int64_t ref_pos = rcur + k;
+                            if (ref_pos < beg || ref_pos >= end) continue;
+                            uint32_t qpos = qcur + (uint32_t)k;
+                            if (qpos >= qlen) break;
+                            wins = rw_add_base(w, cfg, hdr, tid, b, s, ref_pos, qpos,
+                                               qid, 0, RW_DIRECT(qpos), &sm,
+                                               h, wins, &wins_cap, &wins_n);
+                        }
                     }
                     qcur += (uint32_t)len; rcur += len;
                     break;
@@ -931,25 +1175,48 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         st->cnt[win->strand][cat][win->base]++;
     }
 
-    /* sort sites by position and emit */
-    site_ord *ord = (site_ord *)malloc((size_t)(sm.n ? sm.n : 1) * sizeof(*ord));
-    for (int i = 0; i < sm.n; ++i) { ord[i].pos = sm.spos[i]; ord[i].idx = i; }
-    qsort(ord, (size_t)sm.n, sizeof(*ord), cmp_site_ord);
+    /* flush any orphan overlap fragments (mate missing / outside region) */
+    for (khint_t k = kh_begin(fovl_h); k != kh_end(fovl_h); ++k) {
+        if (!kh_exist(fovl_h, k)) continue;
+        frag_ovl_t *fo = kh_val(fovl_h, k);
+        frag_ovl_flush(fo, &sm, beg, end);
+        frag_ovl_free(fo);
+    }
+
+    /* emit sites in position order */
     const int emit_plus = cfg->strand_process != CM_STRAND_REVERSE;
     const int emit_minus = cfg->strand_process != CM_STRAND_FORWARD;
-    for (int i = 0; i < sm.n; ++i) {
-        int64_t pos = ord[i].pos;
-        if (pos < 0 || pos >= w->chr_len) continue;
-        char ref_ch = w->chr_seq[pos];   /* pre-uppercased */
-        if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
-        if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
-        /* -p site filter (per-strand): keep the site if either strand passes,
-         * then emit only the passing strand(s). */
-        int smask = expr_pile_apply_strands(w->expr, cfg, w, hdr->target_name[tid],
-                                            &sm.st[ord[i].idx], pos, ref_ch);
-        if (smask == 0) continue;
-        emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.st[ord[i].idx],
-                  emit_plus && (smask & 1), emit_minus && (smask & 2));
+    if (sm.arr) {
+        /* fast-dna dense array: positions are contiguous, no sort needed. */
+        for (int i = 0; i < sm.arr_len; ++i) {
+            int64_t pos = sm.arr_beg + i;
+            if (pos < 0 || pos >= w->chr_len) continue;
+            char ref_ch = w->chr_seq[pos];
+            if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
+            if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
+            int smask = expr_pile_apply_strands(w->expr, cfg, w, hdr->target_name[tid],
+                                                &sm.arr[i], pos, ref_ch);
+            if (smask == 0) continue;
+            emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.arr[i],
+                      emit_plus && (smask & 1), emit_minus && (smask & 2));
+        }
+    } else {
+        site_ord *ord = (site_ord *)malloc((size_t)(sm.n ? sm.n : 1) * sizeof(*ord));
+        for (int i = 0; i < sm.n; ++i) { ord[i].pos = sm.spos[i]; ord[i].idx = i; }
+        qsort(ord, (size_t)sm.n, sizeof(*ord), cmp_site_ord);
+        for (int i = 0; i < sm.n; ++i) {
+            int64_t pos = ord[i].pos;
+            if (pos < 0 || pos >= w->chr_len) continue;
+            char ref_ch = w->chr_seq[pos];
+            if (w->inc_bed && !bed_overlap(w->inc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
+            if (w->exc_bed && bed_overlap(w->exc_bed, hdr->target_name[tid], (int)pos, (int)pos + 1)) continue;
+            int smask = expr_pile_apply_strands(w->expr, cfg, w, hdr->target_name[tid],
+                                                &sm.st[ord[i].idx], pos, ref_ch);
+            if (smask == 0) continue;
+            emit_site(w, cfg, hdr, fp, tid, (int)pos, ref_ch, &sm.st[ord[i].idx],
+                      emit_plus && (smask & 1), emit_minus && (smask & 2));
+        }
+        free(ord);
     }
 
     /* cleanup */
@@ -957,8 +1224,9 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
         if (kh_exist(qnids, k)) free((void *)(uintptr_t)kh_key(qnids, k));
     kh_destroy(qn2id, qnids);
     kh_destroy(posq, h);
+    kh_destroy(fovl, fovl_h);
+    kh_destroy(dupeset, dupe_qids);
     free(wins);
-    free(ord);
     sm_free(&sm);
     bam_destroy1(b);
     if (aux.itr) bam_itr_destroy(aux.itr);
@@ -1046,6 +1314,9 @@ static region_t *build_regions(bam_hdr_t *hdr, int threads, const char *region, 
  * CRAM: NOT supported in this self-contained core (no CRAM codec); we fail
  * with a conversion hint instead of a confusing crash.
  * Returns 0=BAM, 1=SAM(transcoded), 2=CRAM(unsupported), -1=error. */
+/* Input format detection.  Returns 0 = BAM/CRAM (handled natively by the
+ * full htslib sam_open), 1 = SAM text (transcoded to a temp BAM), -1 = error.
+ * CRAM is read natively: the core links the full htslib with a CRAM codec. */
 static int detect_input_format(const char *path, int *is_sam) {
     unsigned char magic[4] = {0};
     gzFile gz = gzopen(path, "rb");
@@ -1053,13 +1324,13 @@ static int detect_input_format(const char *path, int *is_sam) {
     int n = (int)gzread(gz, magic, 4);
     gzclose(gz);
     if (n >= 4 && memcmp(magic, "BAM\1", 4) == 0) { *is_sam = 0; return 0; }
-    if (n >= 4 && memcmp(magic, "CRAM", 4) == 0)   { *is_sam = 0; return 2; }
+    if (n >= 4 && memcmp(magic, "CRAM", 4) == 0)   { *is_sam = 0; return 0; }
     *is_sam = 1; return 1;   /* SAM text (or empty -> header parse fails later with a clear error) */
 }
 
 static int transcode_sam_to_bam(const char *sam, char *tmp_bam, size_t cap) {
-    htsFile *in = hts_open(sam, "r", NULL);
-    if (in == NULL || in->is_bin) {
+    samFile *in = sam_open(sam, "r");
+    if (in == NULL) {
         fprintf(stderr, "[countmut] error: cannot open SAM input '%s'\n", sam);
         if (in) hts_close(in);
         return -1;
@@ -1084,21 +1355,21 @@ static int transcode_sam_to_bam(const char *sam, char *tmp_bam, size_t cap) {
     unlink(tpl);                          /* we only wanted the unique name */
     snprintf(tmp_bam, cap, "%s.bam", tpl);
 
-    BGZF *out = bgzf_open(tmp_bam, "w");
+    samFile *out = sam_open(tmp_bam, "w");
     if (out == NULL) {
         fprintf(stderr, "[countmut] error: cannot write temp BAM '%s'\n", tmp_bam);
         bam_hdr_destroy(hdr); hts_close(in);
         unlink(tmp_bam);
         return -1;
     }
-    bam_hdr_write(out, hdr);
+    sam_hdr_write(out, hdr);
     bam1_t *b = bam_init1();
     int nrec = 0;
     while (sam_read1(in, hdr, b) >= 0) {
-        bam_write1(out, b);
+        sam_write1(out, hdr, b);
         ++nrec;
     }
-    bgzf_close(out);
+    sam_close(out);
     bam_destroy1(b);
     bam_hdr_destroy(hdr);
     hts_close(in);
@@ -1117,32 +1388,24 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     FILE *fp = (out_path && strcmp(out_path, "-") != 0) ? fopen(out_path, "w") : stdout;
     if (!fp) return 1;
     int is_sam = 0;
-    if (detect_input_format(bam, &is_sam) == 2) {
-        fprintf(stderr,
-                "[countmut] error: CRAM input '%s' is not supported by this "
-                "self-contained core (it has no CRAM codec).  Convert it first:\n"
-                "    samtools view -b %s -o out.bam\n"
-                "(For CRAM with an embedded reference, samtools view also works "
-                "without a separate FASTA.)\n", bam, bam);
-        if (fp != stdout) fclose(fp);
-        return 3;
-    }
     char sam_tmp[1100] = {0};
-    if (is_sam) {
+    if (detect_input_format(bam, &is_sam) == 1) {
+        /* SAM text: transcode to a temp BAM (the core reads BAM/CRAM natively). */
         if (transcode_sam_to_bam(bam, sam_tmp, sizeof(sam_tmp)) != 0) {
             if (fp != stdout) fclose(fp);
             return 3;
         }
         bam = sam_tmp;   /* the rest of the run operates on the temp BAM */
     }
-    BGZF *hfp = bgzf_open(bam, "r");
+    samFile *hfp = sam_open(bam, "r");
     if (!hfp) {
-        fprintf(stderr, "[countmut] error: cannot open BAM file '%s'\n", bam);
+        fprintf(stderr, "[countmut] error: cannot open input file '%s'\n", bam);
         if (fp != stdout) fclose(fp);
         return 3;
     }
-    bam_hdr_t *hdr = bam_hdr_read(hfp);
-    bgzf_close(hfp);
+    hts_set_fai_filename(hfp, fa);   /* CRAM decode needs the reference */
+    bam_hdr_t *hdr = sam_hdr_read(hfp);
+    sam_close(hfp);
     if (!hdr) {
         fprintf(stderr, "[countmut] error: cannot read BAM header from '%s'\n", bam);
         if (fp != stdout) fclose(fp);
@@ -1150,6 +1413,15 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     }
 
     int nthreads = cfg->threads < 1 ? 1 : cfg->threads;
+    /* Shared CRAM decode pool: all workers decode CRAM through one pool so
+     * the per-file decoder threads never contend with the worker threads.
+     * BAM reads are single-threaded anyway, so this only helps CRAM. */
+    htsThreadPool tpool = {NULL, 0};
+    int use_pool = 0;
+    if (nthreads > 1) {
+        tpool.pool = hts_tpool_init(nthreads);
+        if (tpool.pool) { tpool.qsize = nthreads * 2; use_pool = 1; }
+    }
     int nregions = 0;
     region_t *regs = build_regions(hdr, nthreads, region, &nregions);
     if (!regs) { bam_hdr_destroy(hdr); if (fp != stdout) fclose(fp); return 4; }
@@ -1173,7 +1445,8 @@ int cm_run(const cm_config *cfg, const char *bam, const char *fa, const char *ou
     worker_t *workers = (worker_t *)calloc(nthreads, sizeof(worker_t));
     for (int i = 0; i < nthreads; ++i)
         worker_init(&workers[i], bam, fa, cfg->pad, cfg->bedfile, cfg->exclude,
-                    cfg->read_expr, cfg->pile_expr, cfg->output_expr);
+                    cfg->read_expr, cfg->pile_expr, cfg->output_expr,
+                    use_pool ? &tpool : NULL);
     for (int i = 0; i < nthreads; ++i) {
         if (!workers[i].fp || !workers[i].idx) {
             fprintf(stderr, "[countmut] error: cannot open BAM/index '%s'\n", bam);
@@ -1191,6 +1464,7 @@ fail_workers:
     free(workers);
     for (int i = 0; i < nthreads; ++i) fclose(files[i]);
     free(files);
+    if (use_pool && tpool.pool) hts_tpool_destroy(tpool.pool);
     bam_hdr_destroy(hdr);
     if (fp != stdout) fclose(fp);
     return 3;
@@ -1234,6 +1508,7 @@ input_ok:
     free(s.spans); free(tds); free(files);
     for (int i = 0; i < nthreads; ++i) worker_free(&workers[i]);
     free(workers); free(regs);
+    if (use_pool && tpool.pool) hts_tpool_destroy(tpool.pool);
     bam_hdr_destroy(hdr);
     if (fp != stdout) fclose(fp);
     if (is_sam) {   /* clean up the transcoded temp BAM + its index */

@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-27
+
+### Added
+- **Fast `-e` read-filter compiler.**  A per-base `-e` filter (e.g. `bq >= 20`)
+  is now parsed once at startup and compiled to a small C bytecode program
+  (stack machine), then evaluated per base without the Lua VM (~2x faster than
+  the Lua evaluator).  Read-constant filters (e.g. `mapq >= 20`) are evaluated
+  once per read.  Expressions using features outside the compiled subset fall
+  back to the Lua evaluator.
+
+### Changed
+- **Unified `-e` / `-p` filtering.**  All the old per-flag read/site filters are
+  removed in favor of `-e` (read filter) and `-p` (site filter):
+  `--min-mapq`, `--min-baseq`, `--max-sub`, `--max-unc`, `--min-con`,
+  `--trim-fragment-start/end`, `--trim-r1-end`, `--trim-r2-start`,
+  `--min-allele-support`, `--min-allele-frac`, `--min-strand-support`,
+  `--min-depth`, `--mean-depth`, `--flanking`.  Use `-e 'mapq >= N'`,
+  `-e 'bq >= N'`, `-p 'depth >= N'`, etc.
+- **Dense-array fast path is the default for strandless counting.**  No
+  separate "fast-dna mode"; the O(1) dense sitemap is used whenever counting is
+  strandless, including with `-e` filters.
 
 ## [0.2.5] - 2026-09-08
 

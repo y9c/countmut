@@ -47,7 +47,7 @@ static int parse_flags(const char *spec) {
 }
 
 /* parse samtools --input-fmt-option (comma-separated key[=value]) */
-static void parse_input_fmt(const char *spec, int *req, int *excl, int *min_mq) {
+static void parse_input_fmt(const char *spec, int *req, int *excl) {
     char buf[1024]; strncpy(buf, spec, 1023); buf[1023] = 0;
     char *tok = strtok(buf, ",");
     while (tok) {
@@ -56,7 +56,6 @@ static void parse_input_fmt(const char *spec, int *req, int *excl, int *min_mq) 
         *eq = 0; char *key = tok, *val = eq + 1;
         if (!strcmp(key, "reqflags")) *req = parse_flags(val);
         else if (!strcmp(key, "exclflags")) *excl = parse_flags(val);
-        else if (!strcmp(key, "min-MQ") || !strcmp(key, "min-mapq")) *min_mq = atoi(val);
         tok = strtok(NULL, ",");
     }
 }
@@ -72,19 +71,15 @@ static void usage(void) {
         "  --fmt-header STR       header line for a custom -o template\n"
         "  --engine E            read-walk | pileup | auto (default auto)\n"
         "  --vcf                 allele output: emit VCF\n"
-        "  --min-mapq N --max-sub N --max-unc N --min-con N\n"
-        "  --trim-fragment-start N --trim-fragment-end N   fragment 5'/3' trim\n"
-        "  --trim-r1-end N --trim-r2-start N               read R1 3'-end / R2 5'-start trim\n"
-        "  --min-allele-support N --min-allele-frac F --min-strand-support N\n"
-        "  --min-depth N --mean-depth N\n"
         "  --motif-pad N         {motif} reference window: 2*N+1 bases (0 = the base only)\n"
-        "  --count-indels [--strandless]\n"
+        "  --count-indels        count insertions/deletions\n"
+        "  --strandless          collapse +/- strands (base/allele)\n"
         "  --strand S            both | forward | reverse\n"
         "  --read-expr EXPR       -e Lua read filter (evaluated per base)\n"
         "  --pile-expr EXPR       -p Lua site filter (evaluated per site)\n"
         "  --verbose               real-time per-region progress on stderr\n"
         "  --max-depth N          pileup per-position depth cap (0 = unlimited)\n"
-        "  --threads N --flanking N\n");
+        "  --threads N\n");
 }
 
 static int engine_from(const char *s) {
@@ -104,25 +99,11 @@ int main(int argc, char **argv) {
     cfg.target_base = -1;   /* no strand filter by default (--target-base unset) */
     cfg.out = CM_OUT_COMPOSITION;
     cfg.engine = CM_ENGINE_AUTO;
-    cfg.min_mapq = 0;
-    cfg.min_baseq = 0;     /* quality QC is a -e filter (bq >= N): all counted bases are tier x2 */
-    cfg.max_sub = -1;      /* read filters + trimming live in -e, not defaults */
-    cfg.max_unc = -1;
-    cfg.min_con = -1;
-    cfg.trim_fragment_start = 0;
-    cfg.trim_fragment_end = 0;
-    cfg.trim_r1_end = 0;
-    cfg.trim_r2_start = 0;
-    cfg.min_allele_support = 1;
-    cfg.min_allele_frac = 0.0;
-    cfg.min_depth = 0;
-    cfg.mean_depth = 0;
     cfg.count_indels = 0;
     cfg.strandless = 0;      /* base/allele: per-strand '+'/'-' by default; --strandless collapses */
     cfg.strand_process = CM_STRAND_BOTH;
     cfg.max_depth = 0;       /* 0 = unlimited (count all reads) */
     cfg.threads = 1;
-    cfg.flanking = 0;
     cfg.pad = 0;              /* {motif} window: 2*pad+1 ref bases (0 = the base only) */
     cfg.req_flags = 0;
     cfg.excl_flags = 1796; /* samtools default: UNMAP|SECONDARY|QCFAIL|DUP */
@@ -138,24 +119,11 @@ int main(int argc, char **argv) {
         {"mode", required_argument, 0, 'm'},
         {"engine", required_argument, 0, 'e'},
         {"vcf", no_argument, 0, 'v'},
-        {"min-mapq", required_argument, 0, 'q'},
-        {"max-sub", required_argument, 0, 1003},
-        {"max-unc", required_argument, 0, 1004},
-        {"min-con", required_argument, 0, 1005},
-        {"trim-fragment-start", required_argument, 0, 1006},
-        {"trim-fragment-end", required_argument, 0, 1007},
-        {"trim-r1-end", required_argument, 0, 1017},
-        {"trim-r2-start", required_argument, 0, 1018},
-        {"min-allele-support", required_argument, 0, 1008},
-        {"min-allele-frac", required_argument, 0, 1009},
-        {"min-depth", required_argument, 0, 1010},
-        {"mean-depth", required_argument, 0, 1011},
         {"count-indels", no_argument, 0, 1012},
         {"strandless", no_argument, 0, 1013},
         {"strand", required_argument, 0, 's'},
         {"max-depth", required_argument, 0, 1014},
         {"threads", required_argument, 0, 't'},
-        {"flanking", required_argument, 0, 'k'},
         {"bedfile", required_argument, 0, 'b'},
         {"exclude", required_argument, 0, 'x'},
         {"incl-flags", required_argument, 0, 1100},
@@ -193,32 +161,18 @@ int main(int argc, char **argv) {
         case 'r': region = optarg; break;
         case 'e': cfg.engine = engine_from(optarg); break;
         case 'v': cfg.vcf = 1; break;
-        case 'q': cfg.min_mapq = atoi(optarg); break;
         case 's': cfg.strand_process = strand_from(optarg); break;
         case 't': cfg.threads = atoi(optarg); break;
         case 'b': cfg.bedfile = optarg; break;
         case 'x': cfg.exclude = optarg; break;
-        case 'k': cfg.flanking = atoi(optarg); break;
         case 'h': usage(); return 0;
         case 1100: cfg.req_flags |= parse_flags(optarg); break;
         case 1101: cfg.excl_flags = parse_flags(optarg); break;
-        case 1102: parse_input_fmt(optarg, &cfg.req_flags, &cfg.excl_flags, &cfg.min_mapq); break;
+        case 1102: parse_input_fmt(optarg, &cfg.req_flags, &cfg.excl_flags); break;
         case 1016: /* --mate-fix: overlap dedup is always enabled for correctness */ break;
-        case 1003: cfg.max_sub = atoi(optarg); break;
-        case 1004: cfg.max_unc = atoi(optarg); break;
-        case 1005: cfg.min_con = atoi(optarg); break;
-        case 1006: cfg.trim_fragment_start = atoi(optarg); break;
-        case 1007: cfg.trim_fragment_end = atoi(optarg); break;
-        case 1017: cfg.trim_r1_end = atoi(optarg); break;
-        case 1018: cfg.trim_r2_start = atoi(optarg); break;
-        case 1008: cfg.min_allele_support = atoi(optarg); break;
-        case 1009: cfg.min_allele_frac = atof(optarg); break;
-        case 1010: cfg.min_depth = atoi(optarg); break;
-        case 1011: cfg.mean_depth = atoi(optarg); break;
         case 1012: cfg.count_indels = 1; break;
         case 1013: cfg.strandless = 1; break;
         case 1014: cfg.max_depth = atoi(optarg); break;
-        case 1015: cfg.flanking = atoi(optarg); break;
         case 1019: cfg.pad = atoi(optarg); break;
         default: usage(); return 1;
         }

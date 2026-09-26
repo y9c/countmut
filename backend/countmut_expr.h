@@ -8,7 +8,7 @@
 #ifndef COUNTMUT_EXPR_H
 #define COUNTMUT_EXPR_H
 
-#include "sam.h"
+#include <htslib/sam.h>
 #include "countmut_core.h"  /* CM_CAT_MAX for the per-category count matrix */
 
 typedef struct cm_expr cm_expr;

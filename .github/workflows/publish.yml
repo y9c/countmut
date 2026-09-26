@@ -32,10 +32,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Fetch htslib submodule
+        run: git submodule update --init --recursive
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential liblua5.4-dev zlib1g-dev
+          sudo apt-get install -y --no-install-recommends build-essential liblua5.4-dev zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev libdeflate-dev
           python -m pip install --upgrade pip
           pip install build twine
 

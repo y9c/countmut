@@ -16,6 +16,15 @@
 #include <math.h>
 
 #include "countmut_expr.h"
+#ifndef bam_pe32
+static inline uint32_t bam_pe32(const void *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+#endif
+#ifndef bam_cigar_op_p
+#define bam_cigar_op_p(p) bam_cigar_op(bam_pe32(p))
+#endif
+#ifndef bam_cigar_oplen_p
+#define bam_cigar_oplen_p(p) bam_cigar_oplen(bam_pe32(p))
+#endif
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
@@ -37,11 +46,305 @@ struct cm_expr {
     int need_aux;    /* expression calls tag()/exists()/n5()/n3() (needs CUR_READ_KEY) */
     int need_read_tbl, need_pile_tbl;  /* expression uses `read.x` / `pile.x` dotted access */
     int read_reg, pile_reg;            /* luaL_ref of the read / pile tables */
+    void *fast_read;                   /* compiled C -e evaluator (NULL = use Lua) */
 };
 
 #if LUA_VERSION_NUM < 502
 #error "countmut_expr needs Lua >= 5.2"
 #endif
+
+/* ============================================================================
+ * Fast -e read filter: compile the expression once to a small C AST and
+ * evaluate it per aligned base without the Lua VM.  This is what makes a
+ * per-base filter like `bq >= 20` fast (the Lua call is the per-base cost).
+ *
+ * Supported subset: numeric/string literals, the read fields bq/mapq/base/
+ * strand/qpos/ref/flag/pos/qlen/r1/r2/is_reverse/ncigar, comparisons
+ * (== ~= > < >= <=), and `and`/`or`/`not` with parentheses.  Any expression
+ * using features outside this subset (functions, tables, dotted access, ...)
+ * fails to compile and the caller falls back to the Lua evaluator.
+ * ========================================================================== */
+typedef enum { FV_NUM, FV_STR, FV_BOOL } fv_type;
+typedef struct { fv_type t; double num; char str[8]; int b; } fv;
+
+typedef enum { FN_CONST, FN_FIELD, FN_CMP, FN_AND, FN_OR, FN_NOT } fn_type;
+typedef struct fnode {
+    fn_type type;
+    fv val;              /* FN_CONST */
+    int field;           /* FN_FIELD */
+    int op;              /* FN_CMP: 0==,1~=,2>,3<,4>=,5<= */
+    struct fnode *l, *r;
+} fnode;
+
+/* Flat bytecode (stack machine) backend: the AST is compiled once to a
+ * linear instruction stream, so per-base evaluation is a tight switch loop
+ * with no recursion or per-node function calls. */
+typedef struct { uint8_t op; int32_t a; } bc_instr;
+typedef struct {
+    bc_instr *ins; int n_ins, cap;
+    double *nums; int n_nums, num_cap;
+    char **strs; int n_strs, str_cap;
+} fast_expr;
+
+enum {
+    BC_PUSH_NUM, BC_PUSH_STR, BC_PUSH_FIELD,
+    BC_CMP_EQ, BC_CMP_NE, BC_CMP_GT, BC_CMP_LT, BC_CMP_GE, BC_CMP_LE,
+    BC_AND, BC_OR, BC_NOT
+};
+
+enum {
+    F_BQ, F_MAPQ, F_BASE, F_STRAND, F_QPOS, F_REF, F_FLAG, F_POS, F_QLEN,
+    F_R1, F_R2, F_IS_REV, F_NCIGAR
+};
+
+static char fnt16_base(uint8_t nt) {
+    switch (nt) { case 1: return 'A'; case 2: return 'C'; case 4: return 'G';
+                  case 8: return 'T'; case 15: return 'N'; default: return 'N'; }
+}
+static char frc(char c) {
+    switch (c) { case 'A': return 'T'; case 'T': return 'A'; case 'C': return 'G';
+                 case 'G': return 'C'; default: return c; }
+}
+
+static fnode *fnew(fn_type t) { fnode *n = (fnode *)calloc(1, sizeof(fnode)); n->type = t; return n; }
+static void fnode_free(fnode *n) { if (!n) return; fnode_free(n->l); fnode_free(n->r); free(n); }
+
+static int ffield(const char *name) {
+    if (!strcmp(name, "bq") || !strcmp(name, "BQ") || !strcmp(name, "baseq")) return F_BQ;
+    if (!strcmp(name, "mapq") || !strcmp(name, "MAPQ") || !strcmp(name, "mapping_quality")) return F_MAPQ;
+    if (!strcmp(name, "base") || !strcmp(name, "BASE")) return F_BASE;
+    if (!strcmp(name, "strand") || !strcmp(name, "STRAND")) return F_STRAND;
+    if (!strcmp(name, "qpos") || !strcmp(name, "QPOS")) return F_QPOS;
+    if (!strcmp(name, "ref") || !strcmp(name, "ref_base") || !strcmp(name, "REF")) return F_REF;
+    if (!strcmp(name, "flag") || !strcmp(name, "flags") || !strcmp(name, "FLAGS")) return F_FLAG;
+    if (!strcmp(name, "pos") || !strcmp(name, "POS") || !strcmp(name, "start")) return F_POS;
+    if (!strcmp(name, "qlen") || !strcmp(name, "length") || !strcmp(name, "LEN")) return F_QLEN;
+    if (!strcmp(name, "r1")) return F_R1;
+    if (!strcmp(name, "r2")) return F_R2;
+    if (!strcmp(name, "is_reverse")) return F_IS_REV;
+    if (!strcmp(name, "ncigar")) return F_NCIGAR;
+    return -1;
+}
+
+static fv feval_field(int field, const bam1_t *b, int qpos, int strand_sign, char ref_base, int lq) {
+    fv v; memset(&v, 0, sizeof(v));
+    switch (field) {
+    case F_BQ:   v.t = FV_NUM; v.num = (qpos >= 0 && qpos < lq) ? (int)bam_get_qual(b)[qpos] : -1; break;
+    case F_MAPQ: v.t = FV_NUM; v.num = b->core.qual; break;
+    case F_BASE: {
+        v.t = FV_STR;
+        char c = '?';
+        if (qpos >= 0 && qpos < lq) {
+            c = fnt16_base(bam_seqi(bam_get_seq(b), qpos));
+            if (strand_sign < 0) c = frc(c);
+        }
+        v.str[0] = c; v.str[1] = 0; break;
+    }
+    case F_STRAND: v.t = FV_NUM; v.num = strand_sign; break;
+    case F_QPOS:   v.t = FV_NUM; v.num = qpos; break;
+    case F_REF:    v.t = FV_STR; v.str[0] = ref_base ? ref_base : 'N'; v.str[1] = 0; break;
+    case F_FLAG:   v.t = FV_NUM; v.num = b->core.flag; break;
+    case F_POS:    v.t = FV_NUM; v.num = b->core.pos + 1; break;
+    case F_QLEN:   v.t = FV_NUM; v.num = lq; break;
+    case F_R1:     v.t = FV_NUM; v.num = (b->core.flag & BAM_FREAD1) ? 1 : 0; break;
+    case F_R2:     v.t = FV_NUM; v.num = (b->core.flag & 128) ? 1 : 0; break;
+    case F_IS_REV: v.t = FV_NUM; v.num = bam_is_rev(b) ? 1 : 0; break;
+    case F_NCIGAR: v.t = FV_NUM; v.num = b->core.n_cigar; break;
+    default: v.t = FV_BOOL; v.b = 0; break;
+    }
+    return v;
+}
+
+/* bytecode emitter + AST->bytecode compiler */
+static void bc_emit(fast_expr *p, uint8_t op, int32_t a) {
+    if (p->n_ins == p->cap) {
+        p->cap = p->cap ? p->cap * 2 : 16;
+        p->ins = (bc_instr *)realloc(p->ins, (size_t)p->cap * sizeof(bc_instr));
+    }
+    p->ins[p->n_ins].op = op; p->ins[p->n_ins].a = a; p->n_ins++;
+}
+static int bc_add_num(fast_expr *p, double d) {
+    if (p->n_nums == p->num_cap) {
+        p->num_cap = p->num_cap ? p->num_cap * 2 : 8;
+        p->nums = (double *)realloc(p->nums, (size_t)p->num_cap * sizeof(double));
+    }
+    p->nums[p->n_nums] = d; return p->n_nums++;
+}
+static int bc_add_str(fast_expr *p, const char *s) {
+    if (p->n_strs == p->str_cap) {
+        p->str_cap = p->str_cap ? p->str_cap * 2 : 8;
+        p->strs = (char **)realloc(p->strs, (size_t)p->str_cap * sizeof(char *));
+    }
+    p->strs[p->n_strs] = strdup(s); return p->n_strs++;
+}
+static void bc_compile(fast_expr *p, const fnode *n) {
+    switch (n->type) {
+    case FN_CONST:
+        if (n->val.t == FV_NUM) bc_emit(p, BC_PUSH_NUM, bc_add_num(p, n->val.num));
+        else bc_emit(p, BC_PUSH_STR, bc_add_str(p, n->val.str));
+        break;
+    case FN_FIELD: bc_emit(p, BC_PUSH_FIELD, n->field); break;
+    case FN_CMP:
+        bc_compile(p, n->l); bc_compile(p, n->r);
+        bc_emit(p, (uint8_t)(BC_CMP_EQ + n->op), 0);
+        break;
+    case FN_AND: bc_compile(p, n->l); bc_compile(p, n->r); bc_emit(p, BC_AND, 0); break;
+    case FN_OR:  bc_compile(p, n->l); bc_compile(p, n->r); bc_emit(p, BC_OR, 0); break;
+    case FN_NOT: bc_compile(p, n->l); bc_emit(p, BC_NOT, 0); break;
+    }
+}
+
+/* recursive-descent parser */
+static void fskip(const char **p) { while (**p == ' ' || **p == '\t') (*p)++; }
+static fnode *fparse_or(const char **p);
+static fnode *fparse_and(const char **p);
+static fnode *fparse_not(const char **p);
+static fnode *fparse_cmp(const char **p);
+static fnode *fparse_term(const char **p);
+
+static fnode *fparse_or(const char **p) {
+    fnode *l = fparse_and(p); if (!l) return NULL;
+    for (;;) {
+        const char *save = *p; fskip(p);
+        if (strncmp(*p, "or", 2) == 0 && !isalnum((unsigned char)(*p)[2])) *p += 2;
+        else { *p = save; break; }
+        fnode *r = fparse_and(p); if (!r) { fnode_free(l); return NULL; }
+        fnode *n = fnew(FN_OR); n->l = l; n->r = r; l = n;
+    }
+    return l;
+}
+static fnode *fparse_and(const char **p) {
+    fnode *l = fparse_not(p); if (!l) return NULL;
+    for (;;) {
+        const char *save = *p; fskip(p);
+        if (strncmp(*p, "and", 3) == 0 && !isalnum((unsigned char)(*p)[3])) *p += 3;
+        else { *p = save; break; }
+        fnode *r = fparse_not(p); if (!r) { fnode_free(l); return NULL; }
+        fnode *n = fnew(FN_AND); n->l = l; n->r = r; l = n;
+    }
+    return l;
+}
+static fnode *fparse_not(const char **p) {
+    fskip(p);
+    if (strncmp(*p, "not", 3) == 0 && !isalnum((unsigned char)(*p)[3])) {
+        *p += 3;
+        fnode *n = fparse_not(p); if (!n) return NULL;
+        fnode *r = fnew(FN_NOT); r->l = n; return r;
+    }
+    return fparse_cmp(p);
+}
+static fnode *fparse_cmp(const char **p) {
+    fnode *l = fparse_term(p); if (!l) return NULL;
+    fskip(p);
+    int op = -1;
+    if (strncmp(*p, "==", 2) == 0) { op = 0; *p += 2; }
+    else if (strncmp(*p, "~=", 2) == 0) { op = 1; *p += 2; }
+    else if (strncmp(*p, ">=", 2) == 0) { op = 4; *p += 2; }
+    else if (strncmp(*p, "<=", 2) == 0) { op = 5; *p += 2; }
+    else if (**p == '>') { op = 2; *p += 1; }
+    else if (**p == '<') { op = 3; *p += 1; }
+    if (op < 0) { fnode_free(l); return NULL; }   /* no comparison -> unsupported */
+    fnode *r = fparse_term(p); if (!r) { fnode_free(l); return NULL; }
+    fnode *n = fnew(FN_CMP); n->l = l; n->r = r; n->op = op; return n;
+}
+static fnode *fparse_term(const char **p) {
+    fskip(p);
+    if (**p == '(') {
+        (*p)++;
+        fnode *n = fparse_or(p); fskip(p);
+        if (!n || **p != ')') { fnode_free(n); return NULL; }
+        (*p)++; return n;
+    }
+    if (isdigit((unsigned char)**p) || **p == '-') {
+        char *end; double d = strtod(*p, &end);
+        if (end == *p) return NULL;
+        *p = end;
+        fnode *n = fnew(FN_CONST); n->val.t = FV_NUM; n->val.num = d; return n;
+    }
+    if (**p == '\'' || **p == '"') {
+        char quote = **p; (*p)++;
+        char buf[16]; int len = 0;
+        while (**p && **p != quote) { if (len < 15) buf[len++] = **p; (*p)++; }
+        if (**p != quote) return NULL;
+        (*p)++;
+        buf[len] = 0;
+        fnode *n = fnew(FN_CONST); n->val.t = FV_STR; strcpy(n->val.str, buf); return n;
+    }
+    if (isalpha((unsigned char)**p) || **p == '_') {
+        char name[64]; int len = 0;
+        while (isalnum((unsigned char)**p) || **p == '_') { if (len < 63) name[len++] = **p; (*p)++; }
+        name[len] = 0;
+        int f = ffield(name); if (f < 0) return NULL;
+        fnode *n = fnew(FN_FIELD); n->field = f; return n;
+    }
+    return NULL;
+}
+
+/* compile the -e source to a bytecode fast_expr, or NULL if unsupported */
+static fast_expr *fast_expr_compile(const char *src) {
+    if (!src || !*src) return NULL;
+    const char *p = src;
+    fnode *root = fparse_or(&p);
+    if (!root) return NULL;
+    fskip(&p);
+    if (*p != '\0') { fnode_free(root); return NULL; }   /* trailing junk */
+    fast_expr *e = (fast_expr *)calloc(1, sizeof(fast_expr));
+    bc_compile(e, root);
+    fnode_free(root);
+    return e;
+}
+static void fast_expr_free(fast_expr *e) {
+    if (!e) return;
+    free(e->ins); free(e->nums);
+    for (int i = 0; i < e->n_strs; ++i) free(e->strs[i]);
+    free(e->strs); free(e);
+}
+static int fast_expr_eval(const fast_expr *p, const bam1_t *b, int qpos, int strand_sign, char ref_base, int lq) {
+    fv stack[64]; int sp = 0;
+    for (int i = 0; i < p->n_ins; ++i) {
+        const bc_instr *in = &p->ins[i];
+        switch (in->op) {
+        case BC_PUSH_NUM: { fv v; v.t = FV_NUM; v.num = p->nums[in->a]; stack[sp++] = v; break; }
+        case BC_PUSH_STR: { fv v; v.t = FV_STR; strcpy(v.str, p->strs[in->a]); stack[sp++] = v; break; }
+        case BC_PUSH_FIELD: stack[sp++] = feval_field(in->a, b, qpos, strand_sign, ref_base, lq); break;
+        case BC_CMP_EQ: case BC_CMP_NE: case BC_CMP_GT: case BC_CMP_LT:
+        case BC_CMP_GE: case BC_CMP_LE: {
+            fv bv = stack[--sp], av = stack[--sp], r; memset(&r, 0, sizeof(r));
+            r.t = FV_BOOL;
+            if (av.t == FV_NUM && bv.t == FV_NUM) {
+                double x = av.num, y = bv.num;
+                switch (in->op) {
+                case BC_CMP_EQ: r.b = (x == y); break;
+                case BC_CMP_NE: r.b = (x != y); break;
+                case BC_CMP_GT: r.b = (x > y); break;
+                case BC_CMP_LT: r.b = (x < y); break;
+                case BC_CMP_GE: r.b = (x >= y); break;
+                case BC_CMP_LE: r.b = (x <= y); break;
+                }
+            } else if (av.t == FV_STR && bv.t == FV_STR) {
+                int c = strcmp(av.str, bv.str);
+                switch (in->op) {
+                case BC_CMP_EQ: r.b = (c == 0); break;
+                case BC_CMP_NE: r.b = (c != 0); break;
+                case BC_CMP_GT: r.b = (c > 0); break;
+                case BC_CMP_LT: r.b = (c < 0); break;
+                case BC_CMP_GE: r.b = (c >= 0); break;
+                case BC_CMP_LE: r.b = (c <= 0); break;
+                }
+            } else r.b = 0;
+            stack[sp++] = r; break;
+        }
+        case BC_AND: { fv bv = stack[--sp], av = stack[--sp], r; r.t = FV_BOOL;
+            r.b = (av.t == FV_BOOL && av.b) && (bv.t == FV_BOOL && bv.b); stack[sp++] = r; break; }
+        case BC_OR: { fv bv = stack[--sp], av = stack[--sp], r; r.t = FV_BOOL;
+            r.b = (av.t == FV_BOOL && av.b) || (bv.t == FV_BOOL && bv.b); stack[sp++] = r; break; }
+        case BC_NOT: { fv av = stack[--sp], r; r.t = FV_BOOL;
+            r.b = !(av.t == FV_BOOL && av.b); stack[sp++] = r; break; }
+        }
+    }
+    fv r = stack[sp - 1];
+    return (r.t == FV_BOOL && r.b) ? 0 : -1;   /* slot 0 = keep, -1 = drop */
+}
 
 /* ---- aux tag values (bam_aux_get returns [type][payload...]) ---- */
 static void push_aux_value(lua_State *L, const uint8_t *s) {
@@ -679,6 +982,9 @@ cm_expr *cm_expr_new(const char *read_expr, const char *pile_expr,
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (output_tpl && output_tpl[0])
         x->output_ref = compile_output(L, output_tpl);
+    /* Compile the -e filter to a fast C evaluator when it uses the supported
+     * subset; otherwise x->fast_read stays NULL and the Lua path is used. */
+    x->fast_read = fast_expr_compile(read_expr);
     return x;
 }
 
@@ -696,6 +1002,7 @@ int cm_expr_valid(const char *read_expr, const char *pile_expr,
 
 void cm_expr_free(cm_expr *x) {
     if (x == NULL) return;
+    fast_expr_free((fast_expr *)x->fast_read);
     if (x->L) lua_close(x->L);
     free(x);
 }
@@ -851,7 +1158,11 @@ int cm_expr_read(cm_expr *x, const bam1_t *b, const char *rname, const char *mrn
 /* Route one aligned base to a per-site category slot.  -1 = drop; 0..3 = slot. */
 int cm_expr_route(cm_expr *x, const bam1_t *b, const char *rname, const char *mrname,
                   int qpos, int strand_sign, char ref_base) {
-    if (x == NULL || x->read_ref == LUA_NOREF) return 0;   /* no -e -> default slot 0 */
+    if (x == NULL) return 0;   /* no -e -> default slot 0 */
+    if (x->fast_read)          /* compiled C evaluator: no Lua per base */
+        return fast_expr_eval((const fast_expr *)x->fast_read, b, qpos, strand_sign, ref_base,
+                              (int)b->core.l_qseq);
+    if (x->read_ref == LUA_NOREF) return 0;
     lua_State *L = x->L;
     expr_frame(x, b, rname, mrname, qpos, strand_sign, ref_base);
     lua_rawgeti(L, LUA_REGISTRYINDEX, x->read_ref);

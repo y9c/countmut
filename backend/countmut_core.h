@@ -56,26 +56,11 @@ typedef struct {
     int     pad;             /* {motif} reference window: 2*pad+1 bases (--motif-pad) */
     const char *output_expr; /* -o output-row template (overrides the built-in format) */
     const char *fmt_header;  /* header line for a custom output template ("" = none) */
-    int     min_mapq;
-    int     min_baseq;
-    int     max_sub;         /* NS cap, -1 = ignore */
-    int     max_unc;         /* Zf cap, -1 = ignore */
-    int     min_con;         /* Yf floor, -1 = ignore */
-    int     trim_fragment_start;  /* fragment 5' end trim */
-    int     trim_fragment_end;    /* fragment 3' end trim */
-    int     trim_r1_end;          /* read1 (R1) 3'-query-end trim */
-    int     trim_r2_start;        /* read2 (R2) 5'-query-start trim */
-    int     min_allele_support;
-    double  min_allele_frac;
-    int     min_strand_support;
-    int     min_depth;       /* base/allele: min site depth */
-    int     mean_depth;
     int     count_indels;
     int     strandless;      /* 1 = collapse +/- strands (base/allele); 0 = per-strand (default) */
     int     strand_process;  /* CM_STRAND_* */
     int     max_depth;
     int     threads;
-    int     flanking;        /* reference window w/o motif (pbr -k) */
     int     verbose;
     /* samtools-style read filtering */
     int     req_flags;       /* --rf/--incl-flags / reqflags */
