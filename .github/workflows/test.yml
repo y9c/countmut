@@ -23,20 +23,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch htslib submodule
+        run: git submodule update --init --recursive
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install system dependencies (Lua 5.4 for the C -e/-p filters)
+      - name: Install system dependencies (Lua 5.4 + htslib build deps)
         run: |
           sudo apt-get update
-          sudo apt-get install -y liblua5.4-dev
+          sudo apt-get install -y liblua5.4-dev zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev libdeflate-dev
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
+
+      - name: Build the C backend
+        run: |
+          make -C backend
+          mkdir -p countmut/_core
+          cp backend/countmut_core countmut/_core/countmut_core
 
       - name: Install dependencies
         run: |

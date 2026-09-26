@@ -1355,7 +1355,7 @@ static int transcode_sam_to_bam(const char *sam, char *tmp_bam, size_t cap) {
     unlink(tpl);                          /* we only wanted the unique name */
     snprintf(tmp_bam, cap, "%s.bam", tpl);
 
-    samFile *out = sam_open(tmp_bam, "w");
+    samFile *out = sam_open(tmp_bam, "wb");   /* BGZF-compressed BAM (indexable) */
     if (out == NULL) {
         fprintf(stderr, "[countmut] error: cannot write temp BAM '%s'\n", tmp_bam);
         bam_hdr_destroy(hdr); hts_close(in);
@@ -1373,11 +1373,8 @@ static int transcode_sam_to_bam(const char *sam, char *tmp_bam, size_t cap) {
     bam_destroy1(b);
     bam_hdr_destroy(hdr);
     hts_close(in);
-    /* let the subset's own reader-driven indexer build the BAI (the hand-built
-     * hts_idx_push path proved unreliable here) */
     if (bam_index_build(tmp_bam, 0) != 0) {
         fprintf(stderr, "[countmut] error: cannot index temp BAM '%s'\n", tmp_bam);
-        unlink(tmp_bam);
         return -1;
     }
     fprintf(stderr, "[countmut] input is SAM: converted %d records -> %s\n", nrec, tmp_bam);

@@ -50,12 +50,6 @@ def run_c(
         "-",
         "--engine",
         engine,
-        "--min-mapq",
-        "0",
-        "--trim-fragment-start",
-        "0",
-        "--trim-fragment-end",
-        "0",
         "--threads",
         str(threads),
     ]
