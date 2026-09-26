@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-27
+
+### Fixed
+- **SAM input transcode** now writes a BGZF-compressed temp BAM (mode `wb`)
+  so the auto-generated index builds correctly with the full htslib.
+- **Tests** updated for the removed per-flag filters (`--min-mapq`, trim flags,
+  `--min-depth`, ...) and the full-htslib backend; the CI test workflow now
+  fetches the htslib submodule and installs its build deps.
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
