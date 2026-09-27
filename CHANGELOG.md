@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-27
+
+### Fixed
+- **Base complement keyed on read orientation, not biological strand.**  For
+  paired data an R2 read mapped forward has biological strand `1` yet is NOT
+  reverse-oriented.  The base was previously reverse-complemented whenever the
+  biological strand was `-`, which wrongly flipped A<->T for every R2-forward
+  read.  On a pooled sample this turned pure-reference sites into a ~50/50 A/T
+  mix, inflating the apparent allele fraction and hiding real low-frequency
+  mutations.  All four complement sites (read-walk `rw_add_base`, the fast-dna
+  inline path, the fast-dna overlap path, and the pileup engine) now key on
+  `bam_is_rev(b)`.
+- **Regression test** `test_r2_forward_not_complemented` covers the R2-forward
+  case.
+
 ## [0.3.1] - 2026-09-27
 
 ### Fixed

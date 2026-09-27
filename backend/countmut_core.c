@@ -569,10 +569,11 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             int s = bio_strand(b);
             uint8_t nt = bam_seqi(bam_get_seq(b), p->qpos);
             int base_i = nt16_index(nt);
-            /* Minus reads: stored SEQ is 5'->3' (SAM spec) but qpos walks
-             * CIGAR order (left->right); complement the base into the
-             * reference frame (parity with countmut 0.0.x + pysam pairs). */
-            if (s == 1 && base_i < 4) base_i = 3 - base_i;
+            /* Reverse-oriented reads: stored SEQ is 5'->3' (SAM spec) but qpos
+             * walks CIGAR order (left->right); complement the base into the
+             * reference frame.  Key on bam_is_rev (read orientation), not the
+             * biological strand s (which differs for R2 in paired data). */
+            if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
             /* router-assigned category slot (0..CM_CAT_MAX-1); g_a set in
              * the selection loop for every kept candidate. */
             int cat = w->g_a[i];
@@ -764,10 +765,13 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
     }
     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
     int base_i = nt16_index(nt);
-    /* Minus reads: stored SEQ is 5'->3' (SAM spec) but qpos walks CIGAR order
-     * (left->right); complement the base into the reference frame (parity
-     * with countmut 0.0.x + pysam pairs). */
-    if (s == 1 && base_i < 4) base_i = 3 - base_i;
+    /* Reverse-oriented reads: stored SEQ is 5'->3' (SAM spec) but qpos walks
+     * CIGAR order (left->right); complement the base into the reference frame
+     * (parity with countmut 0.0.x + pysam pairs).  This must key on the read's
+     * own orientation (bam_is_rev), NOT on the biological strand s: for paired
+     * reads an R2 mapped forward has bio_strand=1 yet is NOT reverse-oriented,
+     * so complementing on s would wrongly flip its bases (A<->T). */
+    if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
     int qual = (int)bam_get_qual(b)[qpos];
     if (direct) {
         int cat = rslot;
@@ -1040,7 +1044,9 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                             if (qpos >= qlen) break;
                             uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
                             int base_i = nt16_index(nt);
-                            if (s == 1 && base_i < 4) base_i = 3 - base_i;
+                            /* Complement on read orientation (bam_is_rev), not
+                             * the biological strand s (R2 differs). */
+                            if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
                             int cat = 0;
                             if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
                                 cat = cm_expr_route(w->expr, b, hdr->target_name[tid],
@@ -1110,7 +1116,9 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                                     int in_ovl = ((int)qpos >= olo && (int)qpos < ohi);
                                     uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
                                     int base_i = nt16_index(nt);
-                                    if (s == 1 && base_i < 4) base_i = 3 - base_i;
+                                    /* Complement on read orientation (bam_is_rev),
+                                     * not the biological strand s (R2 differs). */
+                                    if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
                                     int cat = 0;
                                     if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
                                         cat = cm_expr_route(w->expr, b, hdr->target_name[tid],
