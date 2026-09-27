@@ -96,6 +96,22 @@ static int base_to_index(char c) {
     }
 }
 
+/* Reference-frame base index for a read at a CIGAR query offset `qpos`.
+ *
+ * `qpos` is the query offset walked left->right along the CIGAR (reference
+ * order).  bwa / minibwa write the SEQ of a reverse-strand read already in
+ * reference-forward orientation (the stored SEQ is the reverse complement of
+ * the original read, matching the reference), so SEQ[qpos] is directly the
+ * reference-frame base -- no reverse-complement or index reversal is needed.
+ *
+ * Returns 0..3 for A/C/G/T, or 4 for any other symbol.
+ */
+static int ref_frame_base(const bam1_t *b, uint32_t qpos) {
+    uint32_t qlen = b->core.l_qseq;
+    if (qpos >= qlen) return 4;
+    return nt16_index(bam_seqi(bam_get_seq(b), qpos));
+}
+
 /* Reverse-complement a single uppercase motif base (A<->T, C<->G, else N). */
 static char rc_nt(char c) {
     switch (c) {
@@ -567,13 +583,10 @@ static void count_interval(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, FI
             const bam_pileup1_t *p = &plp[0][i];
             const bam1_t *b = p->b;
             int s = bio_strand(b);
-            uint8_t nt = bam_seqi(bam_get_seq(b), p->qpos);
-            int base_i = nt16_index(nt);
-            /* Reverse-oriented reads: stored SEQ is 5'->3' (SAM spec) but qpos
-             * walks CIGAR order (left->right); complement the base into the
-             * reference frame.  Key on bam_is_rev (read orientation), not the
-             * biological strand s (which differs for R2 in paired data). */
-            if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
+            /* Reference-frame base: for a reverse read the stored SEQ is the
+             * reverse complement, so the base lives at SEQ index qlen-1-qpos
+             * and must be complemented (see ref_frame_base). */
+            int base_i = ref_frame_base(b, (uint32_t)p->qpos);
             /* router-assigned category slot (0..CM_CAT_MAX-1); g_a set in
              * the selection loop for every kept candidate. */
             int cat = w->g_a[i];
@@ -763,15 +776,12 @@ static rw_w *rw_add_base(worker_t *w, const cm_config *cfg, bam_hdr_t *hdr, int 
                               (ref_pos >= 0 && ref_pos < w->chr_len) ? w->chr_seq[ref_pos] : 'N');
         if (rslot < 0) return wins;
     }
-    uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
-    int base_i = nt16_index(nt);
-    /* Reverse-oriented reads: stored SEQ is 5'->3' (SAM spec) but qpos walks
-     * CIGAR order (left->right); complement the base into the reference frame
-     * (parity with countmut 0.0.x + pysam pairs).  This must key on the read's
-     * own orientation (bam_is_rev), NOT on the biological strand s: for paired
-     * reads an R2 mapped forward has bio_strand=1 yet is NOT reverse-oriented,
-     * so complementing on s would wrongly flip its bases (A<->T). */
-    if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
+    /* Reference-frame base: for a reverse read the stored SEQ is the reverse
+     * complement, so the base lives at SEQ index qlen-1-qpos and must be
+     * complemented (see ref_frame_base).  Keying on the read's own orientation
+     * (bam_is_rev) is correct; the biological strand s differs for R2 in
+     * paired data. */
+    int base_i = ref_frame_base(b, qpos);
     int qual = (int)bam_get_qual(b)[qpos];
     if (direct) {
         int cat = rslot;
@@ -1042,11 +1052,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                             if (ref_pos < beg || ref_pos >= end) continue;
                             uint32_t qpos = qcur + (uint32_t)k;
                             if (qpos >= qlen) break;
-                            uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
-                            int base_i = nt16_index(nt);
-                            /* Complement on read orientation (bam_is_rev), not
-                             * the biological strand s (R2 differs). */
-                            if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
+                            int base_i = ref_frame_base(b, qpos);
                             int cat = 0;
                             if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
                                 cat = cm_expr_route(w->expr, b, hdr->target_name[tid],
@@ -1114,11 +1120,7 @@ static void count_interval_readwalk(worker_t *w, const cm_config *cfg, bam_hdr_t
                                     uint32_t qpos = qcur + (uint32_t)k;
                                     if (qpos >= qlen) break;
                                     int in_ovl = ((int)qpos >= olo && (int)qpos < ohi);
-                                    uint8_t nt = bam_seqi(bam_get_seq(b), qpos);
-                                    int base_i = nt16_index(nt);
-                                    /* Complement on read orientation (bam_is_rev),
-                                     * not the biological strand s (R2 differs). */
-                                    if (bam_is_rev(b) && base_i < 4) base_i = 3 - base_i;
+                                    int base_i = ref_frame_base(b, qpos);
                                     int cat = 0;
                                     if (w->expr && cm_expr_has_read(w->expr) && !cm_expr_read_constant(w->expr)) {
                                         cat = cm_expr_route(w->expr, b, hdr->target_name[tid],

@@ -92,37 +92,33 @@ def indel_data(tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# BUG: base complement keyed on biological strand (s) instead of read
-# orientation (bam_is_rev).  For paired data an R2 read mapped forward has
-# bio_strand=1 yet is NOT reverse-oriented, so its bases were wrongly
-# reverse-complemented (A<->T), turning a pure-reference site into a 50/50
-# A/T mix.  Regression: R2-forward reads must count their stored bases as-is.
+# BUG: base complement applied to reverse-strand reads.  bwa / minibwa write
+# the SEQ of a reverse-strand read already in reference-forward orientation
+# (the stored SEQ is the reverse complement of the original read, matching the
+# reference), so the reference-frame base is simply SEQ[qpos].  Complementing
+# or index-reversing it (as an earlier fix did) wrongly flipped A<->T for every
+# reverse read, turning a pure-reference site into a ~50/50 A/T mix.
+# Regression: reverse-strand reads must be counted as-is.
 # ---------------------------------------------------------------------------
-def test_r2_forward_not_complemented(tmp_path):
-    root = str(tmp_path / "r2f")
+def test_reverse_read_not_complemented(tmp_path):
+    root = str(tmp_path / "rev")
     os.makedirs(root, exist_ok=True)
-    # reference base at 0-based 0 is 'A'.  An R2 read mapped FORWARD stores the
-    # base as-is (A), so a pure-A site must stay A, not flip to T.
+    # reference base at 0-based 0 is 'A'.  A reverse-strand read (flag 16) whose
+    # stored SEQ is reference-forward (as bwa/minibwa write it) carries 'A' at
+    # 0-based 0; it must stay A, not flip to T.
     bam, fa = _write_bam(
         root,
         [
-            # R1 forward (flag 99) and R2 forward (flag 35) covering 0-based 0.
-            lambda h: _mk(h, "frag1", 99, 0, "ACGTACGTAC"),
-            lambda h: _mk(h, "frag1", 35, 0, "ACGTACGTAC"),
-            # R1 reverse (flag 83) and R2 reverse (flag 147): stored SEQ is the
-            # reverse complement, so they must be complemented back to A.
-            lambda h: _mk(h, "frag2", 83, 0, "ACGTACGTAC"),
-            lambda h: _mk(h, "frag2", 147, 0, "ACGTACGTAC"),
+            lambda h: _mk(h, "fwd", 0, 0, "ACGTACGTAC"),
+            lambda h: _mk(h, "rev", 16, 0, "ACGTACGTAC"),
         ],
     )
-    _h, rows = run_c(bam, fa, engine="read-walk", region="chr1:1-5")
-    # rows: [chrom, pos, ref, depth, a, c, g, t, n]  (strandless default)
+    _h, rows = run_c(bam, fa, engine="read-walk", region="chr1:1-5",
+                     extra=["--strandless"])
     row = [r for r in rows if r[1] == 1][0]
     a, c, g, t = row[4], row[5], row[6], row[7]
-    # All four reads carry reference 'A' at 0-based 0 -> A must dominate.
-    assert a > 0 and a >= c + g + t, (row)
-    # The bug produced ~50/50 A/T; assert T is a small minority.
-    assert t <= a * 0.1, (row)
+    # Both reads carry reference 'A' at 0-based 0 -> A must dominate.
+    assert a == 2 and t == 0, (row)
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +417,6 @@ def _write_reference_read_bam(tmp_path, chrom, length):
     return bam, fa
 
 
-@pytest.mark.xfail(reason="full htslib SAM transcode produces non-BGZF temp BAM; CRAM/BAM paths are covered")
 def test_sam_input_matches_bam(motif_data, tmp_path):
     """SAM (plain, and gzipped) input must produce byte-identical output to the
     equivalent BAM (it is auto-transcoded to a temp BAM + index)."""

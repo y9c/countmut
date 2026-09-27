@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-09-27
+
+### Fixed
+- **Reverse-strand reads are no longer reverse-complemented.**  bwa and
+  minibwa write the SEQ of a reverse-strand read already in reference-forward
+  orientation (the stored SEQ is the reverse complement of the original read,
+  matching the reference), so the reference-frame base is simply `SEQ[qpos]`.
+  The previous fix (0.3.2) keyed the complement on `bam_is_rev`, which wrongly
+  flipped A<->T for every reverse read and turned pure-reference sites into a
+  ~50/50 A/T mix on pooled data.  All base-extraction sites now use a single
+  `ref_frame_base()` helper that returns `SEQ[qpos]` unchanged.
+- **Test fixtures** updated so reverse-strand reads store reference-forward
+  SEQ (matching bwa/minibwa), and `test_sam_input_matches_bam` is no longer
+  expected to fail.
+
 ## [0.3.2] - 2026-09-27
 
 ### Fixed

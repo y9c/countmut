@@ -80,13 +80,15 @@ def data(tmp_path_factory):
         mk("p_g", 0, 0, "GGGGGAATT", Q40, ok),
         # p_x: NS > 1 -> dropped entirely
         mk("p_x", 0, 0, "GGGGAAATT", Q40, [("NS", 2), ("Yf", 1), ("Zf", 0)]),
-        # minus reads, 9M at 0-based 4..12; stored T -> reference-frame A.
-        # qpos = pos - 4, so group 1 (qpos 2..6) = 0-based 6..10.
-        mk("m_hi", 16, 4, "TTTTTTTTT", Q40, ok),
+        # minus reads, 9M at 0-based 4..12.  bwa/minibwa store the SEQ of a
+        # reverse-strand read in reference-forward orientation, so the stored
+        # base equals the reference base (no complement needed).  reference
+        # [4:13] = AAAACCCC + 1bp past the contig end.
+        mk("m_hi", 16, 4, "AAAACCCCC", Q40, ok),
         # m_lo: no Yf -> group 0 at every base
-        mk("m_lo", 16, 4, "TTTTTTTTT", Q40, [("NS", 0), ("Yf", 0), ("Zf", 0)]),
+        mk("m_lo", 16, 4, "AAAACCCCC", Q40, [("NS", 0), ("Yf", 0), ("Zf", 0)]),
         # m_x: NS > 1 -> dropped entirely
-        mk("m_x", 16, 4, "TTTTTTTTT", Q40, [("NS", 2), ("Yf", 1), ("Zf", 0)]),
+        mk("m_x", 16, 4, "AAAACCCCC", Q40, [("NS", 2), ("Yf", 1), ("Zf", 0)]),
     ]
     reads.sort(key=lambda r: r.reference_start)
     with pysam.AlignmentFile(bam, "wb", header=header) as out:
