@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-09-28
+
+### Changed
+- **Vendored Lua 5.4.**  The C core no longer depends on a system `liblua`
+  install.  Lua 5.4 source is bundled at `backend/lua/`, compiled into
+  `liblua.a`, and statically linked into `countmut_core`.  The PyPI wheel is
+  now fully self-contained and runs on any host without a separate Lua
+  package (previously it failed on hosts without the matching system
+  `liblua`).
+
 ## [0.3.3] - 2026-09-27
 
 ### Fixed
